@@ -105,9 +105,9 @@ Prompts prefill four tokens per pass of the weights.
 - **SD card not ready** (bring-up step 2; register 0x218 has the controller state, 0x224 / 0x228
   the card's last responses). The card is initialized after the configuration and again about
   every second while it fails (insert it before loading, or wait). Register 0x220 sets the data
-  clock's divider (bits 31:24, 0 = 24 MHz), the sampling delay (bits 1:0, default 1) and
-  restarts the initialization (bit 31 of the value's top half: write 0x8000_0000 | ...); its top
-  16 bits count reads the card did not answer (their words read as 0).
+  clock's divider (bits 15:8: 48 MHz / 2n, 0 = 24 MHz) and the sampling delay (bits 1:0, default
+  1); a write with bit 31 set restarts the initialization. Its top 16 bits count reads the card
+  did not answer (their words read as 0).
 - **Lost bytes on long reads.** The BL616 drops bytes of bursts longer than about 8 KiB; the
   host reads at most 1024 words a command.
 - **SDRAM words wrong** (step 3). `tang_sdram.sv`'s `RD_CAPTURE` (2) is the read capture
