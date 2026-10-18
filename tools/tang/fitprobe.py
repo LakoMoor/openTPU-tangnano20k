@@ -20,6 +20,7 @@ def main():
     m = smol().float().eval()
     p = pathlib.Path(tempfile.mkdtemp())
     m.save_pretrained(p)
+    __import__("atexit").register(__import__("shutil").rmtree, p, True)
     (p / "config.json").write_text((p / "config.json").read_text().replace('"LlamaForCausalLM"', '"LlamaForCausalLM"'))
     spec, W = load_spec(p), load_weights(p)
     cfg = Config(S=1, D=D, MCOLS=M, ACT_BLOCKS=AB, TMEM_WORDS=T, DRAM_BYTES=1 << 28,
@@ -42,6 +43,7 @@ def proglens():
     m = smol(int(sys.argv[6]) if len(sys.argv) > 6 else 2).float().eval()
     p = pathlib.Path(tempfile.mkdtemp())
     m.save_pretrained(p)
+    __import__("atexit").register(__import__("shutil").rmtree, p, True)
     spec, W = load_spec(p), load_weights(p)
     cfg = Config(S=1, D=D, MCOLS=M, ACT_BLOCKS=AB, TMEM_WORDS=T, DRAM_BYTES=1 << 28,
                  IMEM_WORDS=int(__import__("os").environ.get("IMEM", 1 << 18)), LANES=1)

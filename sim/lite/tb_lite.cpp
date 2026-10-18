@@ -22,9 +22,11 @@ int main(int argc, char** argv) {
     std::string out = argv[5];
     uint32_t args[8] = {0};
     unsigned seed = 1;
+    std::string tmem_in;
     int na = 0;
     for (int i = 6; i < argc; i++) {
         if (!strncmp(argv[i], "+seed=", 6)) seed = atoi(argv[i] + 6);
+        else if (!strncmp(argv[i], "+tmem=", 6)) tmem_in = argv[i] + 6;
         else if (na < 8) args[na++] = strtoul(argv[i], 0, 0);
     }
     std::vector<uint8_t> dram(dram_bytes, 0);
@@ -39,7 +41,14 @@ int main(int argc, char** argv) {
     struct Rd { uint64_t due; uint32_t data; };
     std::deque<Rd> q;
     auto tick = [&]() { t->clk = 0; t->eval(); t->clk = 1; t->eval(); };
-    t->rst = 1; t->start = 0; t->dbg_re = 0; t->m_rdy = 0; t->m_rv = 0;
+    t->rst = 1; t->start = 0; t->dbg_re = 0; t->dbg_we = 0; t->m_rdy = 0; t->m_rv = 0;
+    if (!tmem_in.empty()) {                    // the TMEM a previous run left (it persists)
+        std::vector<uint32_t> ti(8192, 0);
+        FILE* g = fopen(tmem_in.c_str(), "rb");
+        if (g) { size_t k = fread(ti.data(), 4, 8192, g); (void)k; fclose(g); }
+        for (uint32_t i = 0; i < 8192; i++) { t->dbg_we = 1; t->dbg_wa = i; t->dbg_wd = ti[i]; tick(); }
+        t->dbg_we = 0;
+    }
     for (int k = 0; k < 8; k++) t->args[k] = args[k];
     t->prog_addr = prog_addr; t->prog_n = prog_n;
     for (int i = 0; i < 5; i++) tick();

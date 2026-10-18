@@ -106,7 +106,8 @@ module lite_mm
 
   always_comb begin
     m_req = fact && fst != F_END && credit != 0;
-    case (fst)
+    m_addr = '0;                                 // OR-shared: zero while not requesting
+    if (m_req) case (fst)
       F_SW:    m_addr = fs_row;
       F_SC:    m_addr = sc_addr(fs_row, fk, fi[0]);
       default: m_addr = fw_row + ((32'(fk) << LD) >> (wf != 2'd0)) + {24'd0, fi, 2'b00};

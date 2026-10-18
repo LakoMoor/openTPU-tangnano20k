@@ -34,10 +34,13 @@ module lite_core
   input  logic        m_rdy,
   input  logic        m_rv,
   input  logic [31:0] m_rd,
-  // TMEM debug read (simulation / host diagnostics; while halted)
+  // TMEM debug access (simulation / host diagnostics; while halted)
   input  logic        dbg_re,
   input  logic [31:0] dbg_ra,
-  output logic [31:0] dbg_rd
+  output logic [31:0] dbg_rd,
+  input  logic        dbg_we,
+  input  logic [31:0] dbg_wa,
+  input  logic [31:0] dbg_wd
 );
   localparam int TW = $clog2(TMEM_WORDS);
   localparam int AW = $clog2(ACT_BLOCKS * D);
@@ -66,9 +69,9 @@ module lite_core
   logic [31:0] t_ra, t_wa, t_wd, t_rd;
   assign t_re = sq_tre | dm_tre | mm_tre | qn_tre | vp_tre | dbg_re;
   assign t_ra = sq_tra | dm_tra | mm_tra | qn_tra | vp_tra | (dbg_re ? dbg_ra : 32'd0);
-  assign t_we = dm_twe | mm_twe | vp_twe;
-  assign t_wa = dm_twa | mm_twa | vp_twa;
-  assign t_wd = dm_twd | mm_twd | vp_twd;
+  assign t_we = dm_twe | mm_twe | vp_twe | dbg_we;
+  assign t_wa = dm_twa | mm_twa | vp_twa | (dbg_we ? dbg_wa : 32'd0);
+  assign t_wd = dm_twd | mm_twd | vp_twd | (dbg_we ? dbg_wd : 32'd0);
   logic [31:0] tmem [TMEM_WORDS];
   always_ff @(posedge clk) begin
     if (t_we) tmem[t_wa[TW-1:0]] <= t_wd;
