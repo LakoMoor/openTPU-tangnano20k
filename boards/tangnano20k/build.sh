@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The Tang Nano 20K bitstream, open-source flow: yosys (+slang) -> nextpnr-himbaechel -> gowin_pack.
 #   boards/tangnano20k/build.sh            -> build/tangnano20k/tang_top.fs
-# Env: TOOLS (OSS CAD Suite), SEED (nextpnr), FREQ (MHz, the timing target).
+# Env: TOOLS (OSS CAD Suite), SEED (nextpnr), BAUD (the UART, default 2000000).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 TOOLS=${TOOLS:-/e/tools/oss-cad-suite}
@@ -18,7 +18,7 @@ BUILD_ID=$(git rev-parse --short=8 HEAD 2>/dev/null || echo 0)
 HASH=$(python tools/tang/arch_hash.py tangnano20k 2>/dev/null || echo 00000000)
 echo "== yosys (build $BUILD_ID, arch hash $HASH)"
 yosys -q -l "$OUT/yosys.log" -m slang -p "
-  read_slang --ignore-assertions -D SYNTHESIS --top tang_top -G BUILD_ID=32'h$BUILD_ID -G ARCH_HASH=32'h$HASH $SRCS;
+  read_slang --ignore-assertions -D SYNTHESIS --top tang_top -G BUILD_ID=32'h$BUILD_ID -G ARCH_HASH=32'h$HASH -G BAUD=${BAUD:-2000000} $SRCS;
   hierarchy -top tang_top;
   synth_gowin -top tang_top -family gw2a -json $OUT/synth.json;
   tee -o $OUT/stat.txt stat"

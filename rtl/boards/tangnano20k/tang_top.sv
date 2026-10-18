@@ -2,7 +2,8 @@
 // SDRAM-and-SD memory system, the UART host link. docs/tangnano20k.md.
 module tang_top #(
   parameter logic [31:0] BUILD_ID  = 32'h0,
-  parameter logic [31:0] ARCH_HASH = 32'h0
+  parameter logic [31:0] ARCH_HASH = 32'h0,
+  parameter int          BAUD      = 2000000      // the UART (BL616 bridge)
 ) (
   input  logic        sys_clk,          // 27 MHz
   input  logic        s1,               // button: reset
@@ -89,7 +90,7 @@ module tang_top #(
 
   // ---- the host
   logic [2:0] hled;
-  tang_host #(.DIV(CORE_KHZ / 2000), .CORE_KHZ(CORE_KHZ), .BUILD_ID(BUILD_ID),
+  tang_host #(.DIV(CORE_KHZ * 1000 / BAUD), .CORE_KHZ(CORE_KHZ), .BUILD_ID(BUILD_ID),
               .ARCH_HASH(ARCH_HASH)) u_host (
     .clk, .rst, .uart_rx, .uart_tx,
     .h_req, .h_we, .h_raw, .h_addr, .h_wd, .h_be, .h_rdy, .h_rv, .h_rd,

@@ -196,6 +196,10 @@ class TangLink:
 
     def run(self, prog_addr: int, n: int, args=(), timeout: float = 3600.0) -> dict:
         """Start the program at prog_addr (n instructions) with its arguments; wait for it."""
+        self.start(prog_addr, n, args)
+        return self.wait(timeout)
+
+    def start(self, prog_addr: int, n: int, args=()) -> None:
         for k in range(8):
             v = int(args[k]) if k < len(args) else 0
             self.reg_write(R_ARG0 + 4 * k, v)
@@ -206,6 +210,11 @@ class TangLink:
         st = self.reg_read(R_STATUS)
         if not st & ST_RUN:
             raise TangError(f"the board did not start the run (STATUS {st:#x})")
+
+    def halted(self) -> bool:
+        return bool(self.reg_read(R_STATUS) & ST_HALTED)
+
+    def wait(self, timeout: float = 3600.0) -> dict:
         t0 = time.monotonic()
         while True:
             st = self.reg_read(R_STATUS)
@@ -394,11 +403,50 @@ class TangBackend:
         from opentpu import isa as I
         return np.asarray(I.assemble(prog), np.uint32)
 
-    def run(self, programs, args=None) -> dict:
+    def _load(self, programs) -> int:
         from opentpu import isa as I
         words = np.asarray(I.assemble(programs[0]), np.uint32)
         self.link.write_words(self.prog_at, words)
-        st = self.link.run(self.prog_at, len(programs[0]), args or ())
+        return len(programs[0])
+
+    def run(self, programs, args=None) -> dict:
+        st = self.link.run(self.prog_at, self._load(programs), args or ())
         self.cycles += st["cycles"]
         self.last = st
         return st
+
+    def run_generate(self, programs, out: int, n: int, on_token=None, stop=None,
+                     state: int | None = None):
+        """The generate loop on the board: its tokens handed over as they land in out[] (fp32
+        ids, OUT_MARK until written), polled while it runs; stop() true writes the state
+        block's stop word (the board halts after the token in flight)."""
+        from opentpu.llm import generate as G
+        self.link.start(self.prog_at, self._load(programs))
+        got, asked = [], False
+
+        def take() -> int:
+            if len(got) >= n:
+                return 0
+            w = self.link.read_words(out + 4 * len(got), min(16, n - len(got)))
+            new = w[:int(np.argmax(w == G.OUT_MARK))] if (w == G.OUT_MARK).any() else w
+            for x in new.view(np.float32):
+                got.append(int(x))
+                if on_token is not None:
+                    on_token(int(x))
+            return len(new)
+        try:
+            while not self.link.halted():
+                if not take():
+                    time.sleep(0.05)
+                if stop is not None and not asked and state is not None and stop():
+                    self.link.write(state + 4 * G.S_HALT, np.ones(1, np.float32))
+                    asked = True
+            st = self.link.wait()
+        except BaseException:
+            self.link.reg_write(R_CTRL, 0)
+            raise
+        while take():
+            pass
+        self.cycles += st["cycles"]
+        self.last = st
+        return st, got
