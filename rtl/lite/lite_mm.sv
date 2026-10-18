@@ -86,6 +86,9 @@ module lite_mm
     endcase
   endfunction
 
+  logic       fstart, cdone;                 // compute -> fetch: start, the MM is over
+  wire  [1:0] mlast = 2'(M - 8'd1);          // the last row j
+
   // ================= fetch =================
   typedef enum logic [1:0] { F_SW, F_SC, F_W, F_END } fst_t;
   fst_t fst;
@@ -170,17 +173,21 @@ module lite_mm
   // ================= compute =================
   typedef enum logic [4:0] {
     C_IDLE, C_PRE_S, C_PRE_SW, C_PRE_M, C_PRE_MW, C_PRE_A, C_PRE_AW, C_ROW, C_SW, C_BLK,
-    C_DA, C_DAW, C_SCW, C_E1, C_E2, C_GE, C_EP_I0, C_EP_I, C_EP_IW, C_EP_S, C_EP_SW, C_EP_O, C_EP_A,
+    C_DA, C_DAW, C_SCW, C_E1, C_E2, C_GE, C_EP_I0, C_EP_N, C_EP_R, C_EP_I, C_EP_IW, C_EP_S, C_EP_SW, C_EP_O, C_EP_A,
     C_EP_AW, C_EP_W, C_RMX, C_END
   } cst_t;
   cst_t cs;
-  logic        fstart, cdone;
   logic [1:0]  j;
   logic [15:0] n;
   logic [7:0]  k;
   logic [6:0]  e;                              // element in the block
   logic [31:0] sw, wcur;
-  logic [31:0] s2 [MCOLS], alpha [MCOLS], ob [MCOLS], mx [MCOLS];
+  logic [31:0] s2 [MCOLS], alpha [MCOLS], mx [MCOLS];
+  logic [15:0] ob [MCOLS];                    // the output rows' TMEM bases
+  // the iterative i2f of acc (normalize a bit, or a byte, a cycle; then round to nearest even)
+  logic        nz_s;
+  logic [47:0] nz_m;
+  logic [8:0]  nz_e;
   logic [19:0] da [MCOLS];
   logic signed [47:0] acc [MCOLS];
   logic signed [19:0] cc [MCOLS];
@@ -229,7 +236,7 @@ module lite_mm
     case (cs)
       C_PRE_S: begin s_re = 1'b1; s_row = j; s_blk = BW'(ab); end
       C_PRE_M: begin f_v = 1'b1; f_a = s_sa; f_b = two_mw; f_c = NZERO; end
-      C_PRE_A: begin t_re = 1'b1; t_ra = cmd.f2 + 32'(j); end
+      C_PRE_A: begin t_re = 1'b1; t_ra = 32'(cmd.f2[15:0] + 16'(j)); end
       C_SW:    pop = have;
       C_DA:    begin s_re = 1'b1; s_row = j; s_blk = BW'(32'(ab) + 32'(k)); end
       C_SCW:   pop = have;
@@ -240,15 +247,13 @@ module lite_mm
       end
       C_EP_I:  begin f_v = 1'b1; f_a = y; f_b = sw; f_c = NZERO; end
       C_EP_S:  begin f_v = 1'b1; f_a = y; f_b = s2[j]; f_c = NZERO; end
-      C_EP_O:  begin t_re = 1'b1; t_ra = ob[j] + 32'(n); end
+      C_EP_O:  begin t_re = 1'b1; t_ra = 32'(ob[j] + n); end
       C_EP_A:  begin f_v = 1'b1; f_a = t_rd; f_b = ascl ? alpha[j] : F_ONE; f_c = y; end
-      C_EP_W:  begin t_we = 1'b1; t_wa = ob[j] + 32'(n); t_wd = y; end
-      C_RMX:   begin t_we = 1'b1; t_wa = ob[mlast] + 32'(ors) + 32'(j); t_wd = mx[j]; end   // out + M*ors + j
+      C_EP_W:  begin t_we = 1'b1; t_wa = 32'(ob[j] + n); t_wd = y; end
+      C_RMX:   begin t_we = 1'b1; t_wa = 32'(ob[mlast] + ors + 16'(j)); t_wd = mx[j]; end   // out + M*ors + j
       default: ;
     endcase
   end
-
-  wire [1:0] mlast = 2'(M - 8'd1);
 
   always_ff @(posedge clk) begin
     done <= 1'b0;
@@ -272,7 +277,7 @@ module lite_mm
         C_PRE_M: cs <= C_PRE_MW;
         C_PRE_MW: if (f_ov) begin
           s2[j] <= f_y;
-          ob[j] <= (j == 0) ? cmd.f3 : ob[j - 1] + 32'(ors);
+          ob[j] <= (j == 0) ? cmd.f3[15:0] : ob[j - 1] + ors;
           cs <= ascl ? C_PRE_A : C_PRE_AW;
         end
         C_PRE_A: cs <= C_PRE_AW;
@@ -377,7 +382,27 @@ module lite_mm
           end else j <= j + 2'd1;
         end
         // ---- the epilogue, row by row
-        C_EP_I0: begin y <= i2f48(acc[j]); cs <= C_EP_I; end
+        C_EP_I0: begin
+          nz_s <= acc[j][47];
+          nz_m <= acc[j][47] ? 48'(-acc[j]) : 48'(acc[j]);
+          nz_e <= 9'd174;                     // 127 + 47
+          if (acc[j] == 0) begin y <= 32'd0; cs <= C_EP_I; end
+          else cs <= C_EP_N;
+        end
+        C_EP_N: begin
+          if (nz_m[47]) cs <= C_EP_R;
+          else if (nz_m[47:40] == 0) begin nz_m <= nz_m << 8; nz_e <= nz_e - 9'd8; end
+          else begin nz_m <= nz_m << 1; nz_e <= nz_e - 9'd1; end
+        end
+        C_EP_R: begin
+          logic [24:0] mr;
+          logic [8:0]  e;
+          mr = {1'b0, nz_m[47:24]} + ((nz_m[23] && ((|nz_m[22:0]) || nz_m[24])) ? 25'd1 : 25'd0);
+          e = nz_e;
+          if (mr[24]) begin mr = mr >> 1; e = e + 9'd1; end
+          y <= {nz_s, e[7:0], mr[22:0]};
+          cs <= C_EP_I;
+        end
         C_EP_I: cs <= C_EP_IW;
         C_EP_IW: if (f_ov) begin y <= f_y; cs <= C_EP_S; end
         C_EP_S: cs <= C_EP_SW;

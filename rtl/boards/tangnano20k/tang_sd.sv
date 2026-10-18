@@ -1,0 +1,248 @@
+// SD card reader, native mode, 4-bit bus (the Tang Nano 20K's TF slot). Reads only: the model
+// image is written on a PC. After reset it initializes the card at ~400 kHz (CMD0, CMD8,
+// ACMD41 until ready, CMD2, CMD3, CMD7, ACMD6 4-bit, CMD16 for SDSC), then runs at clk / (2 *
+// FAST_DIV). A read of n blocks from block lba is CMD18 (SDHC: block address; SDSC: bytes) and
+// the blocks' data streamed out as little-endian words (dv / dw, 128 per block), then CMD12 and
+// the card's busy. The data CRC is not checked (the host's image checksum covers the image).
+module tang_sd #(
+  parameter int SLOW_DIV = 64,           // half periods of the 400 kHz init clock (clk / 128)
+  parameter int FAST_DIV = 1             // half periods of the data clock (50 MHz / 2 = 25 MHz)
+) (
+  input  logic        clk,
+  input  logic        rst,
+  output logic        ready,             // initialized
+  output logic        fail,              // initialization failed (no card, no response)
+  output logic        sdhc,
+  output logic [7:0]  state_dbg,
+  input  logic        rd_req,            // start a read (ready, not busy)
+  input  logic [31:0] rd_lba,
+  input  logic [15:0] rd_n,              // blocks, >= 1
+  output logic        busy,
+  output logic        dv,
+  output logic [31:0] dw,
+  // pins
+  output logic        sd_clk,
+  inout  wire         sd_cmd,
+  input  logic [3:0]  sd_dat
+);
+  // ---------------------------------------------------------------- the card clock
+  logic [7:0] div, dcnt;
+  logic       rise, fall;                // this cycle the card clock rises / falls
+  logic       clk_en;                    // run the clock
+  always_ff @(posedge clk) begin
+    rise <= 1'b0; fall <= 1'b0;
+    if (rst) begin
+      sd_clk <= 1'b0; dcnt <= '0;
+    end else if (clk_en) begin
+      if (dcnt + 8'd1 >= div) begin
+        dcnt <= '0;
+        sd_clk <= ~sd_clk;
+        if (sd_clk) fall <= 1'b1; else rise <= 1'b1;
+      end else dcnt <= dcnt + 8'd1;
+    end
+  end
+  // the registered pins: cmd out on a falling edge, cmd / dat sampled with the rising edge
+  logic cmd_oe, cmd_o;
+  assign sd_cmd = cmd_oe ? cmd_o : 1'bz;
+  logic       cmd_i;
+  logic [3:0] dat_i;
+  always_ff @(posedge clk) begin
+    cmd_i <= sd_cmd;
+    dat_i <= sd_dat;
+  end
+
+  function automatic logic [6:0] crc7(input logic [39:0] d);
+    logic [6:0] c;
+    c = '0;
+    for (int i = 39; i >= 0; i--) begin
+      logic fb;
+      fb = d[i] ^ c[6];
+      c = {c[5:0], 1'b0};
+      if (fb) c = c ^ 7'h09;
+    end
+    return c;
+  endfunction
+
+  // ---------------------------------------------------------------- command engine
+  logic        c_go, c_done, c_tmo;
+  logic [5:0]  c_idx;
+  logic [31:0] c_arg;
+  logic [1:0]  c_rt;                     // 0 none, 1 48-bit, 2 136-bit
+  logic [47:0] c_frame;
+  logic [7:0]  c_bit;
+  logic [135:0] c_resp;
+  logic [7:0]  c_wait;
+  typedef enum logic [2:0] { K_IDLE, K_SEND, K_WAITR, K_RECV, K_GAP } kst_t;
+  kst_t kst;
+  wire [31:0] r_arg = c_resp[39:8];       // a 48-bit response's argument
+
+  always_ff @(posedge clk) begin
+    c_done <= 1'b0;
+    if (rst) begin
+      kst <= K_IDLE; cmd_oe <= 1'b0; cmd_o <= 1'b1;
+    end else case (kst)
+      K_IDLE: if (c_go) begin
+        c_frame <= {2'b01, c_idx, c_arg, crc7({2'b01, c_idx, c_arg}), 1'b1};
+        c_bit <= 8'd47;
+        c_tmo <= 1'b0;
+        kst <= K_SEND;
+      end
+      K_SEND: if (fall) begin
+        cmd_oe <= 1'b1;
+        cmd_o <= c_frame[c_bit];
+        if (c_bit == 0) begin
+          kst <= K_WAITR;
+          c_wait <= 8'd0;
+        end else c_bit <= c_bit - 8'd1;
+      end
+      K_WAITR: begin
+        if (fall && cmd_oe) cmd_oe <= 1'b0;   // the end bit has been out a full clock
+        if (c_rt == 0) begin
+          if (fall && !cmd_oe) begin c_wait <= 8'd8; kst <= K_GAP; end
+        end else if (rise && !cmd_oe) begin
+          if (!cmd_i) begin                  // the start bit
+            c_bit <= (c_rt == 2'd2) ? 8'd134 : 8'd46;
+            c_resp <= '0;
+            kst <= K_RECV;
+          end else if (c_wait == 8'd255) begin
+            c_tmo <= 1'b1; c_wait <= 8'd8; kst <= K_GAP;
+          end else c_wait <= c_wait + 8'd1;
+        end
+      end
+      K_RECV: if (rise) begin
+        c_resp <= {c_resp[134:0], cmd_i};
+        if (c_bit == 0) begin c_wait <= 8'd8; kst <= K_GAP; end
+        else c_bit <= c_bit - 8'd1;
+      end
+      default: if (rise) begin               // K_GAP: eight clocks between commands (Nrc)
+        if (c_wait == 0) begin c_done <= 1'b1; kst <= K_IDLE; end
+        else c_wait <= c_wait - 8'd1;
+      end
+    endcase
+  end
+  // c_resp holds the response without its start bit: [46:0] of a 48-bit one
+
+  // ---------------------------------------------------------------- data receiver
+  logic        d_en;                     // receive blocks
+  logic [15:0] d_left;
+  logic [10:0] d_cnt;                    // nibbles of the block (1024) and CRC (16) + end
+  logic        d_in;                     // inside a block
+  logic [31:0] d_sr;
+  logic [2:0]  d_nib;
+  logic        d_blk;                    // a block completed (pulse)
+  always_ff @(posedge clk) begin
+    dv <= 1'b0;
+    d_blk <= 1'b0;
+    if (rst || !d_en) begin
+      d_in <= 1'b0;
+    end else if (rise) begin
+      if (!d_in) begin
+        if (dat_i == 4'b0000 && d_left != 0) begin d_in <= 1'b1; d_cnt <= '0; d_nib <= '0; end
+      end else begin
+        d_cnt <= d_cnt + 11'd1;
+        if (d_cnt < 11'd1024) begin
+          // a byte is two nibbles, the high one first; a word is four bytes, little endian
+          d_sr <= {d_sr[27:0], dat_i};
+          d_nib <= d_nib + 3'd1;
+          if (d_nib == 3'd7) begin
+            logic [31:0] w;
+            w = {d_sr[27:0], dat_i};          // bytes b0 b1 b2 b3 in arrival order
+            dw <= {w[7:0], w[15:8], w[23:16], w[31:24]};
+            dv <= 1'b1;
+          end
+        end else if (d_cnt == 11'd1040) begin   // 16 CRC nibbles, then the end bit
+          d_in <= 1'b0;
+          d_blk <= 1'b1;
+        end
+      end
+    end
+  end
+
+  // ---------------------------------------------------------------- the controller
+  typedef enum logic [4:0] {
+    M_PWR, M_CMD0, M_CMD8, M_CMD55, M_ACMD41, M_CMD2, M_CMD3, M_CMD7, M_BUSY7, M_CMD55B,
+    M_ACMD6, M_CMD16, M_READY, M_CMD18, M_DATA, M_CMD12, M_BUSY12, M_FAIL, M_WAIT
+  } mst_t;
+  mst_t ms, after;
+  logic [15:0] tries;
+  logic [15:0] rca;
+  logic        v2;
+  logic [7:0]  pwr;
+  assign state_dbg = {kst, ms};
+  assign busy = (ms != M_READY) || rd_req;
+
+  task automatic issue(input logic [5:0] idx, input logic [31:0] arg, input logic [1:0] rt,
+                       input mst_t nxt);
+    c_idx <= idx; c_arg <= arg; c_rt <= rt; c_go <= 1'b1;
+    after <= nxt;
+    ms <= M_WAIT;
+  endtask
+
+  always_ff @(posedge clk) begin
+    c_go <= 1'b0;
+    if (rst) begin
+      ms <= M_PWR; ready <= 1'b0; fail <= 1'b0; sdhc <= 1'b0; clk_en <= 1'b1;
+      div <= 8'(SLOW_DIV); pwr <= '0; tries <= '0; d_en <= 1'b0; v2 <= 1'b0;
+    end else case (ms)
+      M_PWR: if (rise) begin                 // 80+ clocks, CMD high
+        pwr <= pwr + 8'd1;
+        if (pwr == 8'd90) ms <= M_CMD0;
+      end
+      M_CMD0: issue(6'd0, 32'd0, 2'd0, M_CMD8);
+      M_CMD8: issue(6'd8, 32'h0000_01AA, 2'd1, M_CMD55);
+      M_CMD55: begin
+        if (after == M_CMD55 && c_idx == 6'd8) v2 <= !c_tmo && r_arg[7:0] == 8'hAA;
+        issue(6'd55, 32'd0, 2'd1, M_ACMD41);
+      end
+      M_ACMD41: issue(6'd41, v2 ? 32'h40FF_8000 : 32'h00FF_8000, 2'd1, M_CMD2);
+      M_CMD2: begin
+        if (c_idx == 6'd41) begin
+          if (c_tmo || !r_arg[31]) begin       // still busy (or no answer): again
+            tries <= tries + 16'd1;
+            if (tries == 16'd20000) ms <= M_FAIL;
+            else issue(6'd55, 32'd0, 2'd1, M_ACMD41);
+          end else begin
+            sdhc <= r_arg[30];
+            issue(6'd2, 32'd0, 2'd2, M_CMD3);
+          end
+        end
+      end
+      M_CMD3: issue(6'd3, 32'd0, 2'd1, M_CMD7);
+      M_CMD7: begin
+        if (c_tmo) ms <= M_FAIL;
+        else begin
+          rca <= r_arg[31:16];
+          issue(6'd7, {r_arg[31:16], 16'd0}, 2'd1, M_BUSY7);
+        end
+      end
+      M_BUSY7: if (rise && dat_i[0]) issue(6'd55, {rca, 16'd0}, 2'd1, M_ACMD6);
+      M_ACMD6: issue(6'd6, 32'd2, 2'd1, M_CMD16);
+      M_CMD16: issue(6'd16, 32'd512, 2'd1, M_READY);
+      M_READY: begin
+        if (!ready) begin
+          ready <= 1'b1;
+          div <= 8'(FAST_DIV);
+        end
+        if (rd_req) begin
+          d_left <= rd_n;
+          d_en <= 1'b1;
+          issue(6'd18, sdhc ? rd_lba : {rd_lba[22:0], 9'd0}, 2'd1, M_DATA);
+        end
+      end
+      M_DATA: begin
+        if (d_blk) begin
+          d_left <= d_left - 16'd1;
+          if (d_left == 16'd1) issue(6'd12, 32'd0, 2'd1, M_BUSY12);
+        end
+      end
+      M_BUSY12: begin
+        d_en <= 1'b0;
+        if (rise && dat_i[0]) ms <= M_READY;
+      end
+      M_WAIT: if (c_done) ms <= after;
+      default: begin                         // M_FAIL
+        fail <= 1'b1;
+      end
+    endcase
+  end
+endmodule

@@ -48,6 +48,8 @@ module lite_comp
     endcase
   endfunction
 
+  wire f32_t fi = i2f(ri);                 // exp2's i2f(i), log2's i2f(e): one converter
+
   // the step's operands, and where its result goes (0 ry, 1 rt, 2 rh)
   f32_t sa, sb, sc;
   logic [1:0] dst;
@@ -56,7 +58,7 @@ module lite_comp
     case (f)
       FN_EXP2: begin
         if (step == 0) begin                          // f = x - i2f(i)
-          sa = rx; sb = F_ONE; sc = fneg(i2f(ri)); dst = 2'd1;
+          sa = rx; sb = F_ONE; sc = fneg(fi); dst = 2'd1;
         end else begin                                // p = p*f + C(7-step)
           sa = (step == 1) ? EXP2_C7 : ry; sb = rt; sc = ec(7 - int'(step));
         end
@@ -83,7 +85,7 @@ module lite_comp
         if (step == 0) begin                          // t = m - 1
           sa = rx; sb = F_ONE; sc = F_M1; dst = 2'd1;
         end else if (step == 9) begin                 // q*t + i2f(e)
-          sa = ry; sb = rt; sc = i2f(ri);
+          sa = ry; sb = rt; sc = fi;
         end else begin                                // q = q*t + C(9-step)
           sa = (step == 1) ? LOG2_C9 : ry; sb = rt; sc = lc(9 - int'(step));
         end

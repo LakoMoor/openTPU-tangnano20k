@@ -44,12 +44,12 @@ module lite_dma
         m_req = (iss != n);
         m_addr = cmd.f1 + {iss[29:0], 2'b00};
         t_we = m_rv;
-        t_wa = cmd.f2 + got;
+        t_wa = 32'(cmd.f2[15:0] + got[15:0]);
         t_wd = m_rd;
       end
       S_ST_RD: begin
         t_re = 1'b1;
-        t_ra = cmd.f2 + iss;
+        t_ra = 32'(cmd.f2[15:0] + iss[15:0]);
       end
       S_ST_WR: begin
         m_req = 1'b1;

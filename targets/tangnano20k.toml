@@ -1,0 +1,54 @@
+# The Sipeed Tang Nano 20K: Gowin GW2AR-LV18QN88C8/I7 (20K LUT4, 46 block RAMs, 64 Mbit embedded
+# SDRAM), a TF card slot, the BL616 USB UART. The lite core (rtl/lite: one instruction and one
+# element at a time, the ISA's results bit for bit), the model image streamed from the card
+# through the SDRAM (rtl/boards/tangnano20k/tang_mem.sv). docs/tangnano20k.md.
+
+[target]
+name = "tangnano20k"
+kind = "fpga"
+platform_id = 3
+description = "Tang Nano 20K: GW2AR-18, lite core, SD card image + 8 MiB SDRAM, UART"
+
+[arch]
+S = 1
+D = 64
+MCOLS = 4
+ACT_BLOCKS = 64
+ACT_ROWS = 0
+TMEM_WORDS = 8192
+IMEM_WORDS = 4096
+DRAM_BYTES = 536870912          # the address space: the image (SD card) and its COW pages
+LANES = 1
+PAIR = false
+DSTEP = false
+STREAM = false
+SEQ_WC = false
+
+[uarch]                         # the lite core has none of these; stated for the target's form
+MXU_IMPL = 0
+MXU_CL = 1
+VPU_CL = 1
+ULANES = 1
+TMEM_IMPL = 0
+RPB = 1
+WPB = 1
+WIN = 1
+FIFO_DEPTH = 32
+TRACE_DEPTH = 0
+PQ_WIN = 1024
+CHASH = false
+
+[tech]
+family = "generic"
+part = "GW2AR-LV18QN88C8/I7"
+vendor = "gowin"
+
+[platform]
+board = "tangnano20k"
+core_mhz = 48.0
+mem = "sdram+sd"
+channels_per_slice = 1
+channel_bytes = 536870912
+beat_bytes = 32
+host = "uart"
+uart_baud = 2000000

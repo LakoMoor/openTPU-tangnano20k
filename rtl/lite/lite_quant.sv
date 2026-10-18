@@ -79,13 +79,18 @@ module lite_quant
   logic [15:0] r, n, c, g0;
   logic [6:0]  gi;
   logic        pass2;
-  logic [31:0] srow, brow, bptr, sbase;        // src row, dst row / byte, scale row
+  logic [15:0] srow;                          // the src row (TMEM)
+  logic [31:0] brow, bptr, sbase;             // QST: the dst row, its byte, the scale row
   logic [31:0] x, rsv, amax, s, inv, invg, ag;
   logic [4:0]  dg;
   logic [19:0] da;
   logic [31:0] dword;
-  logic [31:0] qbuf [64];
+  logic [31:0] qbuf [64];                   // the group's x (a distributed RAM)
   logic [31:0] qv;
+  logic        qb_we;
+  logic [5:0]  qb_wa;
+  logic [31:0] qb_wd;
+  always_ff @(posedge clk) if (qb_we) qbuf[qb_wa] <= qb_wd;
 
   function automatic logic [4:0] mxoff(input logic [31:0] a, input logic [31:0] m);
     logic signed [9:0] d;
@@ -108,10 +113,10 @@ module lite_quant
     as_we = 1'b0; as_row = '0; as_blk = '0; as_sa = '0; as_da = '0;
     m_req = 1'b0; m_addr = '0; m_wd = '0; m_be = '0;
     case (st)
-      X_RD:  begin t_re = 1'b1; t_ra = srow + 32'(c); end
-      X_A:   if (rsc) begin t_re = 1'b1; t_ra = cmd.w5 + 32'(r); end
+      X_RD:  begin t_re = 1'b1; t_ra = 32'(srow + c); end
+      X_A:   if (rsc) begin t_re = 1'b1; t_ra = 32'(cmd.w5[15:0] + r); end
       X_M1:  begin f_v = 1'b1; f_a = x; f_b = rsv; f_c = NZERO; end
-      X_CSR: begin t_re = 1'b1; t_ra = cmd.w4 + 32'(c); end
+      X_CSR: begin t_re = 1'b1; t_ra = 32'(cmd.w4[15:0] + c); end
       X_M2:  begin f_v = 1'b1; f_a = x; f_b = t_rd; f_c = NZERO; end
       S_SC_M: begin f_v = 1'b1; f_a = amax; f_b = F_INV127; f_c = NZERO; end
       S_INV_C: begin c_start = 1'b1; c_fn = 2'd1; c_x = amax; end
@@ -173,7 +178,7 @@ module lite_quant
       if (c + 16'd1 == n) st <= S_SC_M;
       else begin c <= c + 16'd1; st <= X_RD; end
     end else begin
-      qbuf[gi[5:0]] <= v;
+      qb_we <= 1'b1; qb_wa <= gi[5:0]; qb_wd <= v;
       if (fx[30:0] > ag[30:0]) ag <= fx;
       if (gi + 7'd1 == gsz) begin gi <= '0; st <= S_GRP; end
       else begin gi <= gi + 7'd1; c <= c + 16'd1; st <= X_RD; end
@@ -183,13 +188,14 @@ module lite_quant
   always_ff @(posedge clk) begin
     done <= 1'b0;
     err <= 1'b0;
+    qb_we <= 1'b0;
     if (rst) begin
       st <= S_IDLE;
     end else begin
       case (st)
         S_IDLE: if (start) begin
           r <= '0;
-          srow <= cmd.f1;
+          srow <= cmd.f1[15:0];
           brow <= cmd.f2;
           sbase <= cmd.f3;
           n <= kb << LD;
@@ -279,7 +285,7 @@ module lite_quant
             st <= S_IDLE;
           end else begin
             r <= r + 16'd1;
-            srow <= srow + srs;
+            srow <= srow + srs[15:0];
             brow <= brow + cmd.w6;
             sbase <= sbase + (rowm ? 32'd4 : srw);
             st <= S_ROW;

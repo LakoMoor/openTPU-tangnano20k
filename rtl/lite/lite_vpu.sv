@@ -76,7 +76,7 @@ module lite_vpu
   end
 
   logic [15:0] r, c;
-  logic [31:0] abase, bbase, dbase;
+  logic [15:0] abase, bbase, dbase;           // TMEM addresses (16 bits hold every TMEM)
   logic [31:0] va, vb, vr, vp, vd;
   logic        two;                          // OUTER / EXP2SUB: the second op
   logic [31:0] mx;                           // RMAX / ARGMAX
@@ -85,10 +85,9 @@ module lite_vpu
   logic [6:0]  fn_n;                         // fold: the level's n
   logic [8:0]  pre;                          // OUTER copy index
 
-  wire [31:0] a_addr = abase + 32'(c);
-  wire [31:0] b_addr = (bmode == B_FULL) ? bbase + 32'(c) :
-                       (bmode == B_COL)  ? cmd.f3 + 32'(c) : bbase;
-  wire [31:0] d_addr = dbase + 32'(c);
+  wire [15:0] a_addr = abase + c;
+  wire [15:0] b_addr = (bmode == B_FULL) ? bbase + c : (bmode == B_COL) ? cmd.f3[15:0] + c : bbase;
+  wire [15:0] d_addr = dbase + c;
 
   // the element's multiply-add operands
   f32_t ea, eb, ec;
@@ -118,7 +117,7 @@ module lite_vpu
     case (st)
       S_OPRE: begin                          // read Cv(pre), then Dv(pre)
         t_re = 1'b1;
-        t_ra = two ? (cmd.flags[0] ? cmd.f2 : cmd.f2 + 32'(pre)) : cmd.f7 + 32'(pre);
+        t_ra = 32'(two ? (cmd.flags[0] ? cmd.f2[15:0] : cmd.f2[15:0] + 16'(pre)) : cmd.f7[15:0] + 16'(pre));
       end
       S_OPRE_W: begin
         vb_we = 1'b1;
@@ -128,12 +127,12 @@ module lite_vpu
       S_PINIT: begin vb_we = 1'b1; vb_wa = {2'b00, q}; vb_wd = F_ZERO; end
       S_RDA: begin
         t_re = need_a;
-        t_ra = is_outer ? d_addr : a_addr;
+        t_ra = 32'(is_outer ? d_addr : a_addr);
         vb_ra = is_outer ? 9'd256 + 9'(c) : {3'b000, c[5:0]};   // Cv(c) / partial c % 64
       end
       S_RDB: begin
         t_re = tmem_b;
-        t_ra = b_addr;
+        t_ra = 32'(b_addr);
         vb_ra = 9'(c);                        // OUTER: Dv(c)
       end
       S_FI: begin f_v = 1'b1; f_a = ea; f_b = eb; f_c = ec; end
@@ -143,7 +142,7 @@ module lite_vpu
         c_x = va;
       end
       S_FW: if (f_ov && fn == V_EXP2SUB) begin c_start = 1'b1; c_fn = 2'd0; c_x = f_y; end
-      S_WR: begin t_we = 1'b1; t_wa = d_addr; t_wd = vr; end
+      S_WR: begin t_we = 1'b1; t_wa = 32'(d_addr); t_wd = vr; end
       S_PRD: vb_ra = {2'b00, q};             // pad term: partial q
       S_PFI: begin f_v = 1'b1; f_a = F_ZERO; f_b = F_ONE; f_c = vb_rd; end
       S_PFW: if (f_ov) begin vb_we = 1'b1; vb_wa = {2'b00, q}; vb_wd = f_y; end
@@ -153,15 +152,13 @@ module lite_vpu
       S_FOLD_W: if (f_ov) begin vb_we = 1'b1; vb_wa = {2'b00, q}; vb_wd = f_y; end
       S_RWR: begin
         t_we = 1'b1;
-        t_wa = dbase;
+        t_wa = 32'(dbase);
         t_wd = is_max ? mx : vr;
       end
       S_RWR2: begin                          // ARGMAX's index
-        logic [31:0] ci;
-        ci = 32'(mxi) + cmd.f7;
         t_we = 1'b1;
-        t_wa = dbase + 32'd1;
-        t_wd = i2f(ci);
+        t_wa = 32'(dbase + 16'd1);
+        t_wd = i2f(32'(mxi) + cmd.f7);
       end
       default: ;
     endcase
@@ -194,9 +191,9 @@ module lite_vpu
       st <= S_DONE;
     end else begin
       r <= r + 16'd1;
-      abase <= abase + 32'(ars);
-      bbase <= bbase + 32'(brs);
-      dbase <= dbase + 32'(drs);
+      abase <= abase + ars;
+      bbase <= bbase + brs;
+      dbase <= dbase + drs;
       st <= S_ROW;
     end
   endtask
@@ -210,9 +207,9 @@ module lite_vpu
       case (st)
         S_IDLE: if (start) begin
           r <= '0;
-          abase <= cmd.f2;
-          bbase <= cmd.f3;
-          dbase <= cmd.f1;
+          abase <= cmd.f2[15:0];
+          bbase <= cmd.f3[15:0];
+          dbase <= cmd.f1[15:0];
           pre <= '0;
           two <= 1'b0;
           if (!known || (is_outer && (bmode != B_ROW || cols > 16'd256))) begin

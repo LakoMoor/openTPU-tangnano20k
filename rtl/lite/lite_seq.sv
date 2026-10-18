@@ -39,11 +39,21 @@ module lite_seq
   localparam int PW = $clog2(IMEM_N);
 
   typedef enum logic [3:0] {
-    S_IDLE, S_LOAD, S_FETCH, S_DEC, S_RES, S_EXEC, S_UNIT, S_RLD, S_RLDM, S_ADV, S_HALT
+    S_IDLE, S_LOAD, S_ARGS, S_FETCH, S_DEC, S_RES, S_EXEC, S_UNIT, S_RLD, S_RLDM, S_ADV, S_HALT
   } st_t;
   st_t st;
 
+  // the registers: a distributed RAM, one read and one write port (R0 holds 0: written 0 at
+  // every program start, never written after); the fields resolve one per cycle (S_RES)
   logic [31:0] R [16];
+  logic        r_we;
+  logic [3:0]  r_wa, r_ra;
+  logic [31:0] r_wd;
+  wire  [31:0] r_q = R[r_ra];
+  always_ff @(posedge clk) if (r_we) R[r_wa] <= r_wd;
+  logic [1:0]  res;                         // the field being resolved
+  logic [4:0]  ai;                          // S_ARGS: the register being written
+  logic [31:0] va, vb;                      // R[ra], R[rb] (HALT CHAIN)
   logic [15:0] pc;
   // loop stack (isasim: [start, end, count], depth 4)
   logic [2:0]  sp;
@@ -73,6 +83,15 @@ module lite_seq
   assign i_wbank = ld_got[2:0];
   assign i_waddr = ld_got[PW+2:3];
   assign i_wdata = m_rd;
+
+  // the command: op / flags / rd and the resolved fields registered, w1..w7 straight from the
+  // IMEM's output registers (they hold while pc does, i.e. while the instruction runs)
+  logic [7:0]  c_op, c_flags;
+  logic [3:0]  c_rd;
+  logic [31:0] c_f1, c_f2, c_f3, c_f7;
+  assign cmd = '{op: c_op, flags: c_flags, rd: c_rd, f1: c_f1, f2: c_f2, f3: c_f3,
+                 w1: iw[1], w2: iw[2], w3: iw[3], w4: iw[4], w5: iw[5], w6: iw[6], w7: iw[7],
+                 f7: c_f7};
 
   // the decoded instruction
   logic [7:0] op, flags;
@@ -118,8 +137,10 @@ module lite_seq
     end
   endtask
 
+  logic [3:0] fra, frb, frc;
   always_ff @(posedge clk) begin
     u_start <= '0;
+    r_we <= 1'b0;
     if (rst) begin
       st <= S_IDLE;
       halted <= 1'b0;
@@ -137,12 +158,20 @@ module lite_seq
           if (m_rv) begin
             ld_got <= ld_got + 32'd1;
             if (ld_got + 32'd1 == ld_words) begin
-              for (int k = 0; k < 8; k++) R[k] <= '0;
-              for (int k = 0; k < 8; k++) R[8 + k] <= args[k];
-              pc <= '0;
-              sp <= '0;
-              st <= S_FETCH;
+              ai <= '0;
+              st <= S_ARGS;
             end
+          end
+        end
+        S_ARGS: begin                       // R0..R7 = 0, R8..R15 = the run's arguments
+          r_we <= 1'b1;
+          r_wa <= ai[3:0];
+          r_wd <= ai[3] ? args[ai[2:0]] : 32'd0;
+          ai <= ai + 5'd1;
+          if (ai == 5'd15) begin
+            pc <= '0;
+            sp <= '0;
+            st <= S_FETCH;
           end
         end
         S_FETCH: st <= S_DEC;               // IMEM read of pc
@@ -150,31 +179,34 @@ module lite_seq
           if (pc >= 16'(ld_words >> 3)) begin
             fail(E_PC);
           end else begin
-            cmd.op <= op;
-            cmd.flags <= flags;
-            cmd.rd <= rd;
-            cmd.w1 <= iw[1]; cmd.w2 <= iw[2]; cmd.w3 <= iw[3]; cmd.w4 <= iw[4];
-            cmd.w5 <= iw[5]; cmd.w6 <= iw[6]; cmd.w7 <= iw[7];
-            cmd.f1 <= R[ra] + ((op == OP_LOOP) ? iw[2] : iw[1]);
-            cmd.f2 <= R[rb] + iw[2];
-            cmd.f3 <= R[rc] + iw[3];
-            cmd.f7 <= R[rd] + iw[7];
-            st <= S_EXEC;
+            c_op <= op;
+            c_flags <= flags;
+            c_rd <= rd;
+            fra <= ra; frb <= rb; frc <= rc;
+            r_ra <= ra;
+            res <= '0;
+            st <= S_RES;
           end
+        end
+        S_RES: begin                        // r_q = R[r_ra]: ra, rb, rc, rd in turn
+          res <= res + 2'd1;
+          case (res)
+            2'd0: begin c_f1 <= r_q + ((cmd.op == OP_LOOP) ? cmd.w2 : cmd.w1); va <= r_q; r_ra <= frb; end
+            2'd1: begin c_f2 <= r_q + cmd.w2; vb <= r_q; r_ra <= frc; end
+            2'd2: begin c_f3 <= r_q + cmd.w3; r_ra <= cmd.rd; end
+            default: begin c_f7 <= r_q + cmd.w7; st <= S_EXEC; end
+          endcase
         end
         S_EXEC: begin
           icount <= icount + 32'd1;
           st <= S_ADV;
           case (cmd.op)
             OP_NOP, OP_BAR: ;
-            OP_LI:   if (cmd.rd != 0) R[cmd.rd] <= cmd.w1;
-            OP_ADDI: if (cmd.rd != 0) R[cmd.rd] <= cmd.f1;
+            OP_LI:   begin r_we <= (cmd.rd != 0); r_wa <= cmd.rd; r_wd <= cmd.w1; end
+            OP_ADDI: begin r_we <= (cmd.rd != 0); r_wa <= cmd.rd; r_wd <= cmd.f1; end
             OP_HALT: begin
               if (cmd.flags[0]) begin
-                logic [31:0] ca, cn;
-                ca = R[iw[0][11:8]];
-                cn = R[iw[0][15:12]];
-                begin_load(ca, cn);
+                begin_load(va, vb);
               end else begin
                 halted <= 1'b1;
                 st <= S_HALT;
@@ -215,13 +247,13 @@ module lite_seq
             mul_n <= '0;
             st <= S_RLDM;
           end else begin
-            if (cmd.rd != 0) R[cmd.rd] <= v;
+            r_we <= (cmd.rd != 0); r_wa <= cmd.rd; r_wd <= v;
             st <= S_ADV;
           end
         end
         S_RLDM: begin
           if (mul_n == 6'd32) begin
-            if (cmd.rd != 0) R[cmd.rd] <= mul_p;
+            r_we <= (cmd.rd != 0); r_wa <= cmd.rd; r_wd <= mul_p;
             st <= S_ADV;
           end else begin
             if (mul_b[0]) mul_p <= mul_p + mul_a;
