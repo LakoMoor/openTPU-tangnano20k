@@ -24,7 +24,8 @@ package lite_pkg;
 
   // error codes (STATUS ERR field, the host prints them)
   localparam logic [3:0] E_NONE = 0, E_OPCODE = 1, E_VFUNC = 2, E_LOOP = 3, E_WAITW = 4,
-                         E_CHAIN = 5, E_MM = 6, E_QUANT = 7, E_MEM = 8;
+                         E_CHAIN = 5, E_MM = 6, E_QUANT = 7, E_MEM = 8,
+                         E_PC = 9;
 
   // An instruction with its register-relative fields resolved (docs/isa.md "Encoding"):
   // f1 = R[ra] + w1 (LOOP: R[ra] + w2), f2 = R[rb] + w2, f3 = R[rc] + w3, f7 = R[rd] + w7.
@@ -36,4 +37,40 @@ package lite_pkg;
     logic [31:0] w1, w2, w3, w4, w5, w6, w7;
     logic [31:0] f7;
   } cmd_t;
+
+  // RLD's fp32 -> integer (docs/isa.md "RLD"): truncation toward zero; |x| < 1 gives 0, |x| >= 2^31,
+  // infinities and NaN give 0x80000000
+  function automatic logic [31:0] f2i(input logic [31:0] x);
+    logic [7:0]  e;
+    logic [31:0] m, v;
+    e = x[30:23];
+    m = {8'd1, x[22:0]};
+    if (e < 8'd127) return '0;
+    if (e >= 8'd158) return 32'h8000_0000;
+    v = (e >= 8'd150) ? m << (e - 8'd150) : m >> (8'd150 - e);
+    return x[31] ? -v : v;
+  endfunction
+
+  // int -> fp32, round to nearest even, for MM's exact accumulators (|acc| < 2^47)
+  function automatic logic [31:0] i2f48(input logic signed [47:0] x);
+    logic        s, g, st;
+    logic [47:0] mag, nrm;
+    logic [5:0]  lz;
+    logic [23:0] mm;
+    logic [24:0] mr;
+    logic [8:0]  e;
+    if (x == 0) return 32'd0;
+    s = x[47];
+    mag = s ? (~x + 48'd1) : x;
+    lz = 6'd0;
+    for (int k = 0; k < 48; k++) if (mag[k]) lz = 6'(47 - k);   // the highest set bit wins
+    nrm = mag << lz;
+    e = 9'd174 - 9'(lz);                     // 127 + 47 - lz
+    mm = nrm[47:24];
+    g = nrm[23];
+    st = |nrm[22:0];
+    mr = {1'b0, mm} + ((g && (st || mm[0])) ? 25'd1 : 25'd0);
+    if (mr[24]) begin mr = mr >> 1; e = e + 9'd1; end
+    return {s, e[7:0], mr[22:0]};
+  endfunction
 endpackage
