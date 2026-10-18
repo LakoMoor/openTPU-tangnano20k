@@ -42,6 +42,14 @@ module tang_host #(
   input  logic [31:0] fault_addr, line_fills,
   input  logic [15:0] cow_used,
   input  logic [7:0]  sd_state,
+  input  logic [19:0] sd_info,
+  input  logic [15:0] sd_tmo,
+  output logic [7:0]  sd_div,            // 0x220: the SD settings (tang_sd's cfg_*)
+  output logic [1:0]  sd_samp,
+  output logic        sd_reinit,
+  output logic [2:0]  sd_rsel,
+  input  logic [31:0] sd_resp,
+  input  logic [7:0]  sd_rtmo,
   output logic [2:0]  led
 );
   typedef enum logic [3:0] { P_OP, P_HDR, P_DATA, P_MW, P_MR, P_MRW, P_REGW, P_SEND, P_ACK } pst_t;
@@ -107,8 +115,11 @@ module tang_host #(
       16'h20C: return {fault, 15'd0, cow_used};
       16'h210: return fault_addr;
       16'h214: return line_fills;
-      16'h218: return {sd_state, 20'd0, sdhc, sd_fail, sd_ready, sdram_ready};
+      16'h218: return {sd_state, sd_info, sdhc, sd_fail, sd_ready, sdram_ready};
       16'h21C: return {28'd0, ecode};
+      16'h220: return {sd_tmo, sd_div, 6'd0, sd_samp};
+      16'h224: return sd_resp;                                    // the response 0x228 selects
+      16'h228: return {16'd0, sd_rtmo, 5'd0, sd_rsel};
       default: return 32'hDEAD_BEEF;
     endcase
   endfunction
@@ -135,6 +146,7 @@ module tang_host #(
   logic run_q;
   always_ff @(posedge clk) begin
     map_reset <= 1'b0;
+    sd_reinit <= 1'b0;
     core_start <= 1'b0;
     run_q <= run;
     if (run && !run_q) core_start <= 1'b1;
@@ -143,6 +155,7 @@ module tang_host #(
     else if (idle != '1) idle <= idle + 18'd1;
     if (rst) begin
       ps <= P_OP; run <= 1'b0; h_req <= 1'b0; img_lba <= '0; img_bytes <= '0;
+      sd_div <= '0; sd_samp <= 2'd1;
       for (int k = 0; k < 8; k++) args[k] <= '0;
     end else if (idle == '1) begin
       ps <= P_OP;                         // a stalled command: dropped
@@ -178,6 +191,12 @@ module tang_host #(
             16'h200: img_lba <= hdr[47:16];
             16'h204: img_bytes <= hdr[47:16];
             16'h208: map_reset <= hdr[16];
+            16'h228: sd_rsel <= hdr[18:16];
+            16'h220: begin
+              sd_samp <= hdr[17:16];
+              sd_div <= hdr[31:24];
+              sd_reinit <= hdr[47];
+            end
             default: ;
           endcase
           ps <= P_ACK;

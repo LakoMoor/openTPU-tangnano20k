@@ -67,10 +67,20 @@ module tang_top #(
 
   logic        sd_ready, sd_fail, sdhc, sd_req, sd_busy, sd_dv;
   logic [7:0]  sd_state;
+  logic [19:0] sd_info;
+  logic [15:0] sd_tmo;
+  logic [7:0]  sd_div;
+  logic [1:0]  sd_samp;
+  logic        sd_reinit;
+  logic [2:0]  sd_rsel;
+  logic [31:0] sd_resp;
+  logic [7:0]  sd_rtmo;
   logic [31:0] sd_lba, sd_dw;
   logic [15:0] sd_n;
   tang_sd u_sd (
-    .clk, .rst, .ready(sd_ready), .fail(sd_fail), .sdhc, .state_dbg(sd_state),
+    .clk, .rst, .ready(sd_ready), .fail(sd_fail), .sdhc, .state_dbg(sd_state), .info_dbg(sd_info),
+    .cfg_div(sd_div), .cfg_samp(sd_samp), .reinit(sd_reinit), .rd_tmo(sd_tmo),
+    .resp_sel(sd_rsel), .resp_dbg(sd_resp), .resp_tmo(sd_rtmo),
     .rd_req(sd_req), .rd_lba(sd_lba), .rd_n(sd_n), .busy(sd_busy), .dv(sd_dv), .dw(sd_dw),
     .sd_clk, .sd_cmd, .sd_dat);
 
@@ -97,7 +107,7 @@ module tang_top #(
     .core_rst, .core_start, .prog_addr, .prog_n, .args, .halted, .error, .loading, .ecode,
     .icount, .img_lba, .img_bytes, .map_reset, .map_busy, .mem_idle, .fault,
     .sdram_ready(m_ready), .sd_ready, .sd_fail, .sdhc, .fault_addr, .line_fills, .cow_used,
-    .sd_state, .led(hled));
+    .sd_state, .sd_info, .sd_tmo, .sd_div, .sd_samp, .sd_reinit, .sd_rsel, .sd_resp, .sd_rtmo, .led(hled));
 
   // LEDs: 0 running, 1 error, 2 card ready, 3 SDRAM ready, 4 memory fault, 5 heartbeat
   logic [24:0] hb;

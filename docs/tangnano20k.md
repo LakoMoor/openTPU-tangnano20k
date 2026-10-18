@@ -58,7 +58,7 @@ COW / fault status, line fills, SD status and the error code.
 On the host, `opentpu/host/tang.py` has:
 
 - `TangLink`: the link (a serial port, or TCP to the virtual board);
-- `find_image`: finds the image file on FAT32 or exFAT. The file must be contiguous.
+- `find_image`: finds the image file on FAT16, FAT32 or exFAT. The file must be contiguous.
 - `TangBackend`: the Engine backend. It checks samples of the card's image against the
   Engine's, runs programs, and runs the generate loop on the board, streaming the tokens.
 
@@ -72,7 +72,8 @@ boards/tangnano20k/flash.sh sram            # or: flash (boots with it)
 # 2. the model's image for the card (the same options as the chat)
 hf download HuggingFaceTB/SmolLM2-135M-Instruct --local-dir models/SmolLM2-135M-Instruct
 python tools/tang/sdimage.py models/SmolLM2-135M-Instruct --wformat fp4 --head-format int8 --out OTPU.IMG
-#    copy OTPU.IMG to the root of a freshly formatted FAT32 / exFAT card, insert it
+#    copy OTPU.IMG to the root of a freshly formatted FAT16 / FAT32 / exFAT card, insert it
+#    (several models: one image each, any name, chosen with --image)
 
 # 3. checks, then the chat
 python tools/tang/bringup.py --port COM5 --speed
@@ -80,7 +81,8 @@ python tools/tang/chat.py models/SmolLM2-135M-Instruct --port COM5 --wformat fp4
 ```
 
 SmolLM2-135M-Instruct is 100 MiB in fp4 with an int8 head, or 140 MiB in int8. Every token
-streams the whole image from the card. At about 11 MB/s that is roughly 9 s a token in fp4.
+streams the whole image from the card. Measured on a 2 GB SDSC card: 5.9 MB/s, 17 s a token in
+fp4 ("The capital of France is Paris.", the ISA simulator's tokens).
 Prompts prefill four tokens per pass of the weights.
 
 ## Verification
@@ -100,7 +102,13 @@ Prompts prefill four tokens per pass of the weights.
 
 - **No answer on the UART.** Try `BAUD=1000000 boards/tangnano20k/build.sh`, and pass
   `--baud` to the host tools.
-- **SD card not ready** (bring-up step 2; register 0x218 has the controller state). The data
-  is sampled where `tang_sd.sv` raises the card clock. Bad reads at 24 MHz point at that phase.
+- **SD card not ready** (bring-up step 2; register 0x218 has the controller state, 0x224 / 0x228
+  the card's last responses). The card is initialized after the configuration and again about
+  every second while it fails (insert it before loading, or wait). Register 0x220 sets the data
+  clock's divider (bits 31:24, 0 = 24 MHz), the sampling delay (bits 1:0, default 1) and
+  restarts the initialization (bit 31 of the value's top half: write 0x8000_0000 | ...); its top
+  16 bits count reads the card did not answer (their words read as 0).
+- **Lost bytes on long reads.** The BL616 drops bytes of bursts longer than about 8 KiB; the
+  host reads at most 1024 words a command.
 - **SDRAM words wrong** (step 3). `tang_sdram.sv`'s `RD_CAPTURE` (2) is the read capture
   delay.

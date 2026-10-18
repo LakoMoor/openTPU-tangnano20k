@@ -14,6 +14,16 @@ module tang_sd #(
   output logic        fail,              // initialization failed (no card, no response)
   output logic        sdhc,
   output logic [7:0]  state_dbg,
+  output logic [19:0] info_dbg,          // {a response seen, last timed out, last command, tries}
+  // bring-up settings from the host: the data clock's divider, the sampling delay in clk
+  // cycles after the card clock's rising edge, and a restart of the initialization
+  input  logic [7:0]  cfg_div,
+  input  logic [1:0]  cfg_samp,
+  input  logic        reinit,
+  output logic [15:0] rd_tmo,            // reads that timed out (their words read as 0)
+  input  logic [2:0]  resp_sel,          // the last response to CMD8, ACMD41, CMD3, CMD7, ACMD6,
+  output logic [31:0] resp_dbg,          // CMD16, CMD18, CMD12 (bring-up); bit 32: timed out
+  output logic [7:0]  resp_tmo,
   input  logic        rd_req,            // start a read (ready, not busy)
   input  logic [31:0] rd_lba,
   input  logic [15:0] rd_n,              // blocks, >= 1
@@ -46,10 +56,12 @@ module tang_sd #(
   assign sd_cmd = cmd_oe ? cmd_o : 1'bz;
   logic       cmd_i;
   logic [3:0] dat_i;
+  logic [4:0] pin_q [4];                 // the pins, delayed 1..4 cycles
   always_ff @(posedge clk) begin
-    cmd_i <= sd_cmd;
-    dat_i <= sd_dat;
+    pin_q[0] <= {sd_cmd, sd_dat};
+    for (int k = 1; k < 4; k++) pin_q[k] <= pin_q[k - 1];
   end
+  assign {cmd_i, dat_i} = pin_q[cfg_samp];
 
   function automatic logic [6:0] crc7(input logic [39:0] d);
     logic [6:0] c;
@@ -72,6 +84,7 @@ module tang_sd #(
   logic [7:0]  c_bit;
   logic [135:0] c_resp;
   logic [7:0]  c_wait;
+  logic        c_seen;                   // any response since reset (bring-up)
   typedef enum logic [2:0] { K_IDLE, K_SEND, K_WAITR, K_RECV, K_GAP } kst_t;
   kst_t kst;
   wire [31:0] r_arg = c_resp[39:8];       // a 48-bit response's argument
@@ -79,7 +92,7 @@ module tang_sd #(
   always_ff @(posedge clk) begin
     c_done <= 1'b0;
     if (rst) begin
-      kst <= K_IDLE; cmd_oe <= 1'b0; cmd_o <= 1'b1;
+      kst <= K_IDLE; cmd_oe <= 1'b0; cmd_o <= 1'b1; c_seen <= 1'b0;
     end else case (kst)
       K_IDLE: if (c_go) begin
         c_frame <= {2'b01, c_idx, c_arg, crc7({2'b01, c_idx, c_arg}), 1'b1};
@@ -101,6 +114,7 @@ module tang_sd #(
           if (fall && !cmd_oe) begin c_wait <= 8'd8; kst <= K_GAP; end
         end else if (rise && !cmd_oe) begin
           if (!cmd_i) begin                  // the start bit
+            c_seen <= 1'b1;
             c_bit <= (c_rt == 2'd2) ? 8'd134 : 8'd46;
             c_resp <= '0;
             kst <= K_RECV;
@@ -122,6 +136,18 @@ module tang_sd #(
   end
   // c_resp holds the response without its start bit: [46:0] of a 48-bit one
 
+  logic [31:0] resp_r [8];
+  logic [2:0]  resp_k;
+  always_comb case (c_idx)
+    6'd8: resp_k = 3'd0;  6'd41: resp_k = 3'd1; 6'd3: resp_k = 3'd2;  6'd7: resp_k = 3'd3;
+    6'd6: resp_k = 3'd4;  6'd16: resp_k = 3'd5; 6'd18: resp_k = 3'd6; default: resp_k = 3'd7;
+  endcase
+  always_ff @(posedge clk) if (c_done) begin
+    resp_r[resp_k] <= r_arg;
+    resp_tmo[resp_k] <= c_tmo;
+  end
+  assign resp_dbg = resp_r[resp_sel];
+
   // ---------------------------------------------------------------- data receiver
   logic        d_en;                     // receive blocks
   logic [15:0] d_left;
@@ -130,14 +156,30 @@ module tang_sd #(
   logic [31:0] d_sr;
   logic [2:0]  d_nib;
   logic        d_blk;                    // a block completed (pulse)
+  logic        d_fake;                   // the card stopped sending: the block's words read as 0
+  logic [16:0] d_idle;
+  logic [3:0]  d_slow;
   always_ff @(posedge clk) begin
     dv <= 1'b0;
     d_blk <= 1'b0;
     if (rst || !d_en) begin
-      d_in <= 1'b0;
+      d_in <= 1'b0; d_fake <= 1'b0; d_idle <= '0;
+    end else if (d_fake) begin
+      d_slow <= d_slow + 4'd1;               // (the rest of the read too)
+      if (d_slow == 0) begin
+        dw <= '0;
+        dv <= 1'b1;
+        d_cnt <= d_cnt + 11'd8;
+        if (d_cnt == 11'd1016) begin d_cnt <= '0; d_blk <= 1'b1; end
+      end
+    end else if (!d_in && d_left != 0 && &d_idle) begin
+      d_fake <= 1'b1; d_in <= 1'b1; d_cnt <= '0; d_slow <= '0; d_idle <= '0;
     end else if (rise) begin
+      if (!d_in) d_idle <= d_idle + 17'd1;
       if (!d_in) begin
-        if (dat_i == 4'b0000 && d_left != 0) begin d_in <= 1'b1; d_cnt <= '0; d_nib <= '0; end
+        if (dat_i == 4'b0000 && d_left != 0) begin
+          d_in <= 1'b1; d_cnt <= '0; d_nib <= '0; d_idle <= '0;
+        end
       end else begin
         d_cnt <= d_cnt + 11'd1;
         if (d_cnt < 11'd1024) begin
@@ -168,7 +210,9 @@ module tang_sd #(
   logic [15:0] rca;
   logic        v2;
   logic [7:0]  pwr;
+  logic [25:0] retry;
   assign state_dbg = {kst, ms};
+  assign info_dbg = {c_seen, c_tmo, c_idx, tries[11:0]};
   assign busy = (ms != M_READY) || rd_req;
 
   task automatic issue(input logic [5:0] idx, input logic [31:0] arg, input logic [1:0] rt,
@@ -181,8 +225,11 @@ module tang_sd #(
   always_ff @(posedge clk) begin
     c_go <= 1'b0;
     if (rst) begin
-      ms <= M_PWR; ready <= 1'b0; fail <= 1'b0; sdhc <= 1'b0; clk_en <= 1'b1;
-      div <= 8'(SLOW_DIV); pwr <= '0; tries <= '0; d_en <= 1'b0; v2 <= 1'b0;
+      ms <= M_PWR; ready <= 1'b0; fail <= 1'b0; sdhc <= 1'b0; clk_en <= 1'b1; rd_tmo <= '0;
+      div <= 8'(SLOW_DIV); pwr <= '0; tries <= '0; d_en <= 1'b0; v2 <= 1'b0; retry <= '0;
+    end else if (reinit) begin
+      ms <= M_PWR; ready <= 1'b0; fail <= 1'b0; div <= 8'(SLOW_DIV); pwr <= '0; tries <= '0;
+      d_en <= 1'b0; v2 <= 1'b0; retry <= '0;
     end else case (ms)
       M_PWR: if (rise) begin                 // 80+ clocks, CMD high
         pwr <= pwr + 8'd1;
@@ -221,27 +268,35 @@ module tang_sd #(
       M_READY: begin
         if (!ready) begin
           ready <= 1'b1;
-          div <= 8'(FAST_DIV);
+          fail <= 1'b0;
         end
+        div <= (cfg_div == 0) ? 8'(FAST_DIV) : cfg_div;
         if (rd_req) begin
           d_left <= rd_n;
           d_en <= 1'b1;
+          retry <= '0;
           issue(6'd18, sdhc ? rd_lba : {rd_lba[22:0], 9'd0}, 2'd1, M_DATA);
         end
       end
       M_DATA: begin
         if (d_blk) begin
+          if (d_fake && rd_tmo != '1) rd_tmo <= rd_tmo + 16'd1;
           d_left <= d_left - 16'd1;
           if (d_left == 16'd1) issue(6'd12, 32'd0, 2'd1, M_BUSY12);
         end
       end
       M_BUSY12: begin
         d_en <= 1'b0;
-        if (rise && dat_i[0]) ms <= M_READY;
+        retry <= retry + 26'd1;
+        if ((rise && dat_i[0]) || &retry[21:0]) ms <= M_READY;
       end
       M_WAIT: if (c_done) ms <= after;
-      default: begin                         // M_FAIL
-        fail <= 1'b1;
+      default: begin                         // M_FAIL: try again about a second later (a card
+        fail <= 1'b1;                        // inserted after the configuration)
+        retry <= retry + 26'd1;
+        if (&retry) begin
+          ms <= M_PWR; div <= 8'(SLOW_DIV); pwr <= '0; tries <= '0; v2 <= 1'b0;
+        end
       end
     endcase
   end

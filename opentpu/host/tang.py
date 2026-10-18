@@ -39,7 +39,8 @@ ECODES = {1: "an instruction this build does not run (DSTEP, STREAM, GATHER)",
           4: "a WAITW timed out", 5: "a bad program load (HALT CHAIN)", 6: "a bad MM operand",
           7: "a bad QACT / QST operand", 8: "a memory error", 9: "the pc ran past the program"}
 ACK = 0xA5
-MAX_WORDS = 16384                         # words per R command (n is 16 bits)
+MAX_WORDS = 1024                          # words per R command: the BL616 bridge drops bytes of
+                                          # longer bursts (8 KiB pass)
 W_WORDS = 64                              # words per W command: the board's receive FIFO
 
 
@@ -245,42 +246,52 @@ def _u(b, o, n):
 
 
 def find_image(link: TangLink, name: str = "OTPU.IMG") -> tuple[int, int]:
-    """(first block, bytes) of the file `name` in the card's first partition (FAT32 or exFAT,
-    the root directory), which must be contiguous: the board reads it by block number."""
+    """(first block, bytes) of the file `name` in the card's first partition (FAT16, FAT32 or
+    exFAT, the root directory), which must be contiguous: the board reads it by block number."""
     mbr = link.read_card(0)
     part = 0
-    if mbr[510:512] == b"\x55\xaa" and mbr[3:11] not in (b"EXFAT   ",) and mbr[82:87] != b"FAT32":
+    if (mbr[510:512] == b"\x55\xaa" and mbr[3:11] != b"EXFAT   " and mbr[82:87] != b"FAT32"
+            and mbr[54:59] != b"FAT16"):
         part = _u(mbr, 446 + 8, 4)                     # partition 1's first block
     bs = link.read_card(part)
     want = name.upper()
     if bs[3:11] == b"EXFAT   ":
         return _exfat(link, part, bs, want)
     if bs[82:87] == b"FAT32":
-        return _fat32(link, part, bs, want)
-    raise TangError("the card's first partition is neither FAT32 nor exFAT")
+        return _fat(link, part, bs, want, 32)
+    if bs[54:59] == b"FAT16":
+        return _fat(link, part, bs, want, 16)
+    raise TangError("the card's first partition is not FAT16, FAT32 or exFAT")
 
 
-def _fat32(link, part, bs, want):
+def _fat(link, part, bs, want, bits):
     bps, spc, rsv, nfat = _u(bs, 11, 2), bs[13], _u(bs, 14, 2), bs[16]
     if bps != 512:
-        raise TangError("FAT32 with sectors of other than 512 bytes")
-    fatsz, root = _u(bs, 36, 4), _u(bs, 44, 4)
-    fat0, data0 = part + rsv, part + rsv + nfat * fatsz
+        raise TangError(f"FAT{bits} with sectors of other than 512 bytes")
+    fat0 = part + rsv
+    if bits == 32:
+        root = _u(bs, 44, 4)
+        data0 = fat0 + nfat * _u(bs, 36, 4)
+    else:                                              # FAT16: a fixed root directory
+        root0 = fat0 + nfat * _u(bs, 22, 2)
+        rootn = (_u(bs, 17, 2) * 32 + 511) // 512
+        data0 = root0 + rootn
+    eb, end = (4, 0x0FFFFFF8) if bits == 32 else (2, 0xFFF8)
 
     def chain(c):
         out = []
-        while 2 <= c < 0x0FFFFFF8:
+        while 2 <= c < end:
             out.append(c)
-            blk = fat0 + c * 4 // 512
-            sec = link.read_card(blk)
-            c = _u(sec, c * 4 % 512, 4) & 0x0FFFFFFF
+            sec = link.read_card(fat0 + c * eb // 512)
+            c = _u(sec, c * eb % 512, eb) & 0x0FFFFFFF
         return out
 
     def blk_of(c):
         return data0 + (c - 2) * spc
+    dirs = ([link.read_card(blk_of(c), spc) for c in chain(root)] if bits == 32
+            else [link.read_card(root0, rootn)])
     lfn = ""
-    for c in chain(root):
-        d = link.read_card(blk_of(c), spc)
+    for d in dirs:
         for o in range(0, len(d), 32):
             e = d[o:o + 32]
             if e[0] == 0:
@@ -297,7 +308,7 @@ def _fat32(link, part, bs, want):
             names = {short.upper(), lfn.upper()}
             lfn = ""
             if want in names and not e[11] & 0x10:
-                first = _u(e, 26, 2) | _u(e, 20, 2) << 16
+                first = _u(e, 26, 2) | (_u(e, 20, 2) << 16 if bits == 32 else 0)
                 size = _u(e, 28, 4)
                 ch = chain(first)
                 if ch != list(range(first, first + len(ch))):
