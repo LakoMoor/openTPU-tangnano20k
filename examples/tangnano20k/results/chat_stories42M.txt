@@ -1,0 +1,9 @@
+# python tools/tang/chat.py E:/tangTPU/models/stories42M-pad --port COM6 --image STORY42.IMG --wformat int8 --raw --sd hs,1,2,1 --prompt Once upon a time --max-new 48 (2026-10-18, Tang Nano 20K, SDHC card, 48 MHz SD high speed)
+board: {'version': 4195329, 'caps': 3808428032, 'core_khz': 48000, 'build': 619723158, 'platform': 3, 'hash': 4227168598, 'tmem': 8192, 'imem': 4096, 'act': 64, 'sdram_ready': True, 'sd_ready': True, 'sd_fail': False, 'sdhc': True, 'sd_state': 12}
+sd: {'hs': True, 'cmd6': 1, 'timeouts': 0}
+ready (38 s)
+, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she saw a big, yellow flower in the garden. It was a sunflower! Lily thought it was so
+# (this run's chat.py printed each token decoded alone, which drops SentencePiece's spaces: the
+#  line above is the same 48 tokens decoded together. The ISA simulator gives the same 48 tokens;
+#  Hugging Face's fp32 model the same first 47, then 'the' for 'so'.)
+[5 prompt tokens 27.4 s, 48 tokens 213.5 s = 0.22 tok/s]

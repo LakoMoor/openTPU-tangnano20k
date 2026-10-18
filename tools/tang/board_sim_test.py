@@ -19,7 +19,7 @@ import torch  # noqa: E402
 import transformers  # noqa: E402
 
 from opentpu import target as T  # noqa: E402
-from opentpu.host.tang import TangBackend, TangLink  # noqa: E402
+from opentpu.host.tang import TANG_BLOCK, TangBackend, TangLink  # noqa: E402
 from opentpu.llm import load_spec  # noqa: E402
 from opentpu.llm.qwen3 import Engine, load_weights  # noqa: E402
 from tools.tang import fatimg  # noqa: E402
@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--tokens", type=int, default=2)
     ap.add_argument("--port", type=int, default=5555)
     ap.add_argument("--wformat", default="int8")
+    ap.add_argument("--sd", default=None, help="the card's bus: hs,POL,SAMP or 24 (TANG_SD)")
     a = ap.parse_args()
     cfg = T.config("tangnano20k")
     torch.manual_seed(0)
@@ -47,7 +48,7 @@ def main():
         p = pathlib.Path(d)
         m.save_pretrained(p)
         spec, W = load_spec(p), load_weights(p)
-    kw = dict(cap=256, cfg=cfg, resident=True, wformat=a.wformat)
+    kw = dict(cap=256, cfg=cfg, resident=True, wformat=a.wformat, block=TANG_BLOCK)
     img = Engine(spec, W, backend=Capture, **kw).backend.image
     pad = -img.size % 65536
     card = fatimg.build({"OTPU.IMG": img.tobytes() + bytes(pad)})
@@ -60,6 +61,7 @@ def main():
         print(sim.stdout.readline().strip(), flush=True)
         link = TangLink(f"tcp:127.0.0.1:{a.port}", timeout=600)
         print("board:", link.wait_ready(timeout=600), flush=True)
+        print("sd:", link.sd_setup(a.sd), flush=True)
         ref = Engine(spec, W, **kw)
         dut = Engine(spec, W, backend=TangBackend.factory(link), **kw)
         ok = True
@@ -71,7 +73,8 @@ def main():
             st = dut.backend.last
             print(f"token {t}: {'bit-exact' if same else 'DIFFERENT'} ({time.time() - t0:.0f}s wall, "
                   f"{st['cycles']} board cycles = {st['seconds']:.2f}s at 48 MHz, line fills "
-                  f"{link.reg_read(0x214)}, COW pages {link.reg_read(0x20C) & 0xFFFF})", flush=True)
+                  f"{link.reg_read(0x214)}, COW pages {link.reg_read(0x20C) & 0xFFFF}, card reads restarted "
+                  f"{link.reg_read(0x22C)})", flush=True)
         sys.exit(0 if ok else 1)
     finally:
         sim.kill()

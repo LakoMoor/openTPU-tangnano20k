@@ -29,6 +29,7 @@ def main():
     ap.add_argument("--image", default="OTPU.IMG")
     ap.add_argument("--sdram-mib", type=float, default=1)
     ap.add_argument("--speed", action="store_true")
+    ap.add_argument("--sd", default=None, help="the card's bus: hs,POL,SAMP[,NEG] (tools/tang/sdtune.py) or 24 (default)")
     a = ap.parse_args()
     link = TG.TangLink(a.port, baud=a.baud)
     i = link.info()
@@ -38,7 +39,10 @@ def main():
     assert link.reg_read(TG.R_SCRATCH) == 0x12345678, "scratch register"
     try:
         i = link.wait_ready(timeout=5)
-        print(f"[2] SD card ready, SDHC {i['sdhc']}")
+        print("[2] SD card ready")
+        print(f"    bus: {link.sd_setup(a.sd or '24')}")          # (re-initialized: a card swapped meanwhile)
+        i = link.info()
+        print(f"    card: SDHC {i['sdhc']}")
         card = True
     except TG.TangError as e:
         print(f"[2] SD card: {e} (state {link.info()['sd_state']})")
@@ -77,24 +81,28 @@ def main():
             link.read_words(j * 65536, 1)
         dt = time.time() - t0
         print(f"[4] card: {link.reg_read(TG.R_LINE_FILLS) - f0} line fills in {dt:.2f} s = "
-              f"{k * 65536 / dt / 1e6:.1f} MB/s")
+              f"{k * 65536 / dt / 1e6:.1f} MB/s; reads restarted so far {link.reg_read(0x22C)}, "
+              f"blocks lost {link.reg_read(TG.R_SD_CFG) >> 16}")
     # [5] a VOP on the core
     link.set_image(0, 0)
     x = rng.standard_normal(64).astype(np.float32)
     link.write_words(0x1000, x.view(np.uint32))
     prog = [I.ld(0x1000, 0, 64), I.vop(I.V_EXP2, 100, 0, 0, 1, 64, 64, 64, 0),
-            I.vop(I.V_RSUM, 200, 100, 0, 1, 64, 1, 64, 0), I.st(0x2000, 100, 65), I.halt()]
+            I.vop(I.V_RSUM, 200, 100, 0, 1, 64, 1, 64, 0), I.st(0x2000, 100, 64),
+            I.st(0x2100, 200, 1), I.halt()]          # (only words the program wrote: TMEM is not
+                                                     # cleared between runs)
     w = I.assemble(prog)
     link.write_words(0x8000, w)
     st = link.run(0x8000, len(prog))
-    got = link.read_words(0x2000, 65)
+    got = np.concatenate([link.read_words(0x2000, 64), link.read_words(0x2100, 1)])
     from opentpu.isasim import Machine
     cfg = T.config("tangnano20k")
     dram = np.zeros(1 << 16, np.uint8)
     dram[0x1000:0x1100] = x.view(np.uint8)
     import dataclasses
     m = Machine(dataclasses.replace(cfg, DRAM_BYTES=1 << 16), [prog], [dram]).run()
-    want = m.slices[0].dram[0x2000:0x2000 + 260].view(np.uint32)
+    out = m.slices[0].dram
+    want = np.concatenate([out[0x2000:0x2100].view(np.uint32), out[0x2100:0x2104].view(np.uint32)])
     print(f"[5] core: {st['cycles']} cycles, {st['instructions']} instructions, exp2 + rsum "
           f"{'bit-exact' if np.array_equal(got, want) else 'DIFFERENT'}")
 

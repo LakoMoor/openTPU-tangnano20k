@@ -1,11 +1,11 @@
-// The Tang Nano 20K's DRAM: a 512 MiB address space (the core's and the host's) backed by the
+// The Tang Nano 20K's DRAM: a 1 GiB address space (the core's and the host's) backed by the
 // model image file on the SD card, with the 8 MiB SDRAM as its cache and its writable copy.
 //
 //   SDRAM (words)          what
-//   0x000000 .. 0x00FFFF   the page table: a half word per 4 KiB page of the 512 MiB space
+//   0x000000 .. 0x01FFFF   the page table: a half word per 4 KiB page of the 1 GiB space
 //                          (bit 15: the page has its own copy, bits 10:0 its COW page)
-//   0x010000 .. 0x04FFFF   the SD line cache: 16 lines of 64 KiB (fully associative)
-//   0x050000 .. 0x1FFFFF   COW pages: 1728 x 4 KiB
+//   0x020000 .. 0x05FFFF   the SD line cache: 16 lines of 64 KiB (fully associative)
+//   0x060000 .. 0x1FFFFF   COW pages: 1664 x 4 KiB
 //
 // A read of a page without a copy reads the image (the line holding it, from the SD card on a
 // miss); past the image's end it reads 0. The first write to such a page copies it (from the
@@ -16,7 +16,7 @@
 // the card by its physical address (raw: byte address = block * 512), for the FAT.
 module tang_mem #(
   parameter int NLINE = 16,
-  parameter int NCOW  = 1728
+  parameter int NCOW  = 1664
 ) (
   input  logic        clk,
   input  logic        rst,
@@ -26,7 +26,7 @@ module tang_mem #(
   input  logic        map_reset,         // clear the page table, the TLB, the lines (pulse)
   output logic        map_busy,
   output logic        mem_idle,          // no request in progress (every write has landed)
-  output logic        fault,             // sticky: the COW pool ran out, or an address >= 512 MiB
+  output logic        fault,             // sticky: the COW pool ran out, or an address >= 1 GiB
   output logic [31:0] fault_addr,
   output logic [15:0] cow_used,
   output logic [31:0] line_fills,
@@ -52,6 +52,8 @@ module tang_mem #(
   input  logic        sd_busy,
   input  logic        sd_dv,
   input  logic [31:0] sd_dw,
+  input  logic        sd_ok,             // the block's words stand / discard them (it comes again)
+  input  logic        sd_bad,
   // the SDRAM (tang_sdram)
   input  logic        m_ready,
   output logic        m_req, m_we,
@@ -64,7 +66,7 @@ module tang_mem #(
   input  logic        m_rv,
   input  logic [31:0] m_rd
 );
-  localparam logic [20:0] LINE_BASE = 21'h010000, COW_BASE = 21'h050000;
+  localparam logic [20:0] LINE_BASE = 21'h020000, COW_BASE = 21'h060000;
   localparam int LW = $clog2(NLINE);
 
   typedef enum logic [4:0] {
@@ -77,7 +79,7 @@ module tang_mem #(
   logic        rq_h, rq_we, rq_raw;
   logic [31:0] rq_addr, rq_wd;
   logic [3:0]  rq_be;
-  wire  [16:0] page = rq_addr[28:12];
+  wire  [17:0] page = rq_addr[29:12];
 
   // ---- the chunk buffer: 8 words of the virtual chunk cb_tag (not raw reads)
   logic [31:0] cb [8];
@@ -85,26 +87,26 @@ module tang_mem #(
   logic        cb_v;
   wire  cb_hit = cb_v && cb_tag == rq_addr[31:5];
 
-  // ---- the TLB: entry {valid, tag page[16:8], pte[15:0]}
-  logic [25:0] tlb [256];
-  logic [25:0] tlb_q;
+  // ---- the TLB: entry {valid, tag page[17:8], pte[15:0]}
+  logic [26:0] tlb [256];
+  logic [26:0] tlb_q;
   logic        tlb_we;
   logic [7:0]  tlb_wa;
-  logic [25:0] tlb_wd;
+  logic [26:0] tlb_wd;
   always_ff @(posedge clk) begin
     if (tlb_we) tlb[tlb_wa] <= tlb_wd;
     tlb_q <= tlb[page[7:0]];
   end
   logic [15:0] pte;
 
-  // ---- the SD lines, keyed {raw, line}: an image line is the image's 64 KiB at addr[28:16]
+  // ---- the SD lines, keyed {raw, line}: an image line is the image's 64 KiB at addr[29:16]
   // (blocks img_lba + 128 * line ..), a raw line the card's blocks 128 * line .. (the FAT)
   logic [25:0] ltag [NLINE];
   logic [NLINE-1:0] lval;
   logic [LW-1:0] lway, victim;
   logic        lhit;
-  wire  [25:0] lkey = rq_raw ? {1'b1, 9'd0, rq_addr[31:16]} : {1'b0, 12'd0, rq_addr[28:16]};
-  wire  [31:0] fill_lba = rq_raw ? {rq_addr[31:16], 7'd0} : img_lba + {12'd0, rq_addr[28:16], 7'd0};
+  wire  [25:0] lkey = rq_raw ? {1'b1, 9'd0, rq_addr[31:16]} : {1'b0, 11'd0, rq_addr[29:16]};
+  wire  [31:0] fill_lba = rq_raw ? {rq_addr[31:16], 7'd0} : img_lba + {11'd0, rq_addr[29:16], 7'd0};
   always_comb begin
     lhit = 1'b0; lway = '0;
     for (int w = 0; w < NLINE; w++)
@@ -126,7 +128,7 @@ module tang_mem #(
   logic [8:0]  win;                        // fill: words received
   logic [1:0]  part;                       // COW: quarter of the page (256 words)
   logic [20:0] sdr;                        // the SDRAM word address of the request
-  logic [16:0] clr;
+  logic [17:0] clr;
   logic        wsel;                       // burst write source: 0 zeros, 1 bbuf
   logic [7:0]  tclr;
   logic        cow_ret;                    // a COW waits for its line's fill
@@ -172,14 +174,14 @@ module tang_mem #(
       if (m_wtake) bi <= bi + 9'd1;
       case (st)
         S_INIT: if (m_ready) begin clr <= '0; tclr <= '0; st <= S_CLR; end
-        // ---- clear the page table (256 bursts of 256 words) and the TLB
+        // ---- clear the page table (512 bursts of 256 words) and the TLB
         S_CLR: begin
           tlb_we <= 1'b1; tlb_wa <= tclr; tlb_wd <= '0; tclr <= tclr + 8'd1;
-          if (!m_req && !m_ack && clr[16:8] != 9'h100) begin
-            m_req <= 1'b1; m_we <= 1'b1; m_addr <= {5'd0, clr[15:8], 8'd0}; m_len <= 9'd256;
+          if (!m_req && !m_ack && clr[17:8] != 10'h200) begin
+            m_req <= 1'b1; m_we <= 1'b1; m_addr <= {4'd0, clr[16:8], 8'd0}; m_len <= 9'd256;
           end
-          if (m_ack) clr <= clr + 17'd256;
-          if (clr[16:8] == 9'h100 && !m_req && tclr == 8'hFF) begin
+          if (m_ack) clr <= clr + 18'd256;
+          if (clr[17:8] == 10'h200 && !m_req && tclr == 8'hFF) begin
             cb_v <= 1'b0; lval <= '0; cow_used <= '0; st <= S_IDLE;
           end
         end
@@ -203,18 +205,18 @@ module tang_mem #(
             st <= S_IDLE;
           end else if (rq_raw) begin
             st <= rq_we ? S_IDLE : S_SDLOOK;  // the card is never written
-          end else if (rq_addr[31:29] != 0) begin
+          end else if (rq_addr[31:30] != 0) begin
             fault <= 1'b1; fault_addr <= rq_addr;
             if (!rq_we) respond(32'd0);
             st <= S_IDLE;
           end else st <= S_TLBCK;
         end
         S_TLBCK: begin
-          if (tlb_q[25] && tlb_q[24:16] == page[16:8]) begin
+          if (tlb_q[26] && tlb_q[25:16] == page[17:8]) begin
             pte <= tlb_q[15:0];
             st <= S_ROUTE;
           end else begin                      // the page-table word holding the entry
-            m_req <= 1'b1; m_we <= 1'b0; m_addr <= {5'd0, page[16:1]}; m_len <= 9'd1;
+            m_req <= 1'b1; m_we <= 1'b0; m_addr <= {4'd0, page[17:1]}; m_len <= 9'd1;
             st <= S_PT;
           end
         end
@@ -223,7 +225,7 @@ module tang_mem #(
           logic [15:0] e;
           e = page[0] ? m_rd[31:16] : m_rd[15:0];
           pte <= e;
-          tlb_we <= 1'b1; tlb_wa <= page[7:0]; tlb_wd <= {1'b1, page[16:8], e};
+          tlb_we <= 1'b1; tlb_wa <= page[7:0]; tlb_wd <= {1'b1, page[17:8], e};
           st <= S_ROUTE;
         end
         S_ROUTE: begin
@@ -259,8 +261,9 @@ module tang_mem #(
             bb_wa <= {nblk_in[0], win[6:0]};
             bb_wd <= sd_dw;
             win <= win + 9'd1;
-            if (win[6:0] == 7'd127) nblk_in <= nblk_in + 16'd1;
           end
+          if (sd_ok) begin nblk_in <= nblk_in + 16'd1; win[6:0] <= '0; end   // (its CRC held)
+          if (sd_bad) win[6:0] <= '0;                                        // again, same half
           if (nblk_out != nblk_in && !m_req) begin
             m_req <= 1'b1; m_we <= 1'b1; m_len <= 9'd128;
             m_addr <= LINE_BASE + {victim, nblk_out[6:0], 7'd0};
@@ -280,8 +283,9 @@ module tang_mem #(
             bb_wa <= {nblk_in[0], win[6:0]};
             bb_wd <= sd_dw;
             win <= win + 9'd1;
-            if (win[6:0] == 7'd127) nblk_in <= nblk_in + 16'd1;
           end
+          if (sd_ok) begin nblk_in <= nblk_in + 16'd1; win[6:0] <= '0; end   // (its CRC held)
+          if (sd_bad) win[6:0] <= '0;                                        // again, same half
           if (m_wtake && bi[6:0] == 7'd127) begin
             nblk_out <= nblk_out + 16'd1;
             st <= S_FILL;
@@ -356,7 +360,7 @@ module tang_mem #(
         S_COWWR: if (m_wtake && bi[7:0] == 8'd255) begin
           if (part == 2'd3) begin
             m_req <= 1'b1; m_we <= 1'b1; m_len <= 9'd1;
-            m_addr <= {5'd0, page[16:1]};
+            m_addr <= {4'd0, page[17:1]};
             st <= S_COWPT;
           end else begin
             part <= part + 2'd1;
@@ -365,7 +369,7 @@ module tang_mem #(
         end
         S_COWPT: if (m_wtake) begin           // the page-table entry, then the TLB, then the write
           tlb_we <= 1'b1; tlb_wa <= page[7:0];
-          tlb_wd <= {1'b1, page[16:8], 1'b1, 4'd0, 11'(cow_used)};
+          tlb_wd <= {1'b1, page[17:8], 1'b1, 4'd0, 11'(cow_used)};
           pte <= {1'b1, 4'd0, 11'(cow_used)};
           cow_used <= cow_used + 16'd1;
           if (cb_v && cb_tag[26:7] == rq_addr[31:12]) cb_v <= 1'b0;

@@ -68,10 +68,12 @@ module tang_top #(
   logic        sd_ready, sd_fail, sdhc, sd_req, sd_busy, sd_dv;
   logic [7:0]  sd_state;
   logic [19:0] sd_info;
-  logic [15:0] sd_tmo;
+  logic [15:0] sd_tmo, sd_retry;
+  logic        sd_ok, sd_bad;
   logic [7:0]  sd_div;
   logic [1:0]  sd_samp;
-  logic        sd_reinit;
+  logic        sd_reinit, sd_hs, sd_pol, sd_neg;
+  logic [5:0]  sd_hs_stat;
   logic [2:0]  sd_rsel;
   logic [31:0] sd_resp;
   logic [7:0]  sd_rtmo;
@@ -79,9 +81,9 @@ module tang_top #(
   logic [15:0] sd_n;
   tang_sd u_sd (
     .clk, .rst, .ready(sd_ready), .fail(sd_fail), .sdhc, .state_dbg(sd_state), .info_dbg(sd_info),
-    .cfg_div(sd_div), .cfg_samp(sd_samp), .reinit(sd_reinit), .rd_tmo(sd_tmo),
+    .cfg_div(sd_div), .cfg_samp(sd_samp), .cfg_hs(sd_hs), .cfg_pol(sd_pol), .cfg_neg(sd_neg), .hs_stat(sd_hs_stat), .reinit(sd_reinit), .rd_tmo(sd_tmo), .rd_retry(sd_retry),
     .resp_sel(sd_rsel), .resp_dbg(sd_resp), .resp_tmo(sd_rtmo),
-    .rd_req(sd_req), .rd_lba(sd_lba), .rd_n(sd_n), .busy(sd_busy), .dv(sd_dv), .dw(sd_dw),
+    .rd_req(sd_req), .rd_lba(sd_lba), .rd_n(sd_n), .busy(sd_busy), .dv(sd_dv), .dw(sd_dw), .blk_ok(sd_ok), .blk_bad(sd_bad),
     .sd_clk, .sd_cmd, .sd_dat);
 
   logic        h_req, h_we, h_raw, h_rdy, h_rv;
@@ -95,7 +97,7 @@ module tang_top #(
     .cow_used, .line_fills,
     .c_req, .c_we, .c_addr, .c_wd, .c_be, .c_rdy, .c_rv, .c_rd,
     .h_req, .h_we, .h_raw, .h_addr, .h_wd, .h_be, .h_rdy, .h_rv, .h_rd,
-    .sd_ready, .sd_req, .sd_lba, .sd_n, .sd_busy, .sd_dv, .sd_dw,
+    .sd_ready, .sd_req, .sd_lba, .sd_n, .sd_busy, .sd_dv, .sd_dw, .sd_ok, .sd_bad,
     .m_ready, .m_req, .m_we, .m_addr, .m_len, .m_ack, .m_wtake, .m_wd, .m_wbe, .m_rv, .m_rd);
 
   // ---- the host
@@ -107,7 +109,7 @@ module tang_top #(
     .core_rst, .core_start, .prog_addr, .prog_n, .args, .halted, .error, .loading, .ecode,
     .icount, .img_lba, .img_bytes, .map_reset, .map_busy, .mem_idle, .fault,
     .sdram_ready(m_ready), .sd_ready, .sd_fail, .sdhc, .fault_addr, .line_fills, .cow_used,
-    .sd_state, .sd_info, .sd_tmo, .sd_div, .sd_samp, .sd_reinit, .sd_rsel, .sd_resp, .sd_rtmo, .led(hled));
+    .sd_state, .sd_info, .sd_tmo, .sd_retry, .sd_div, .sd_samp, .sd_reinit, .sd_hs, .sd_pol, .sd_neg, .sd_hs_stat, .sd_rsel, .sd_resp, .sd_rtmo, .led(hled));
 
   // LEDs: 0 running, 1 error, 2 card ready, 3 SDRAM ready, 4 memory fault, 5 heartbeat
   logic [24:0] hb;

@@ -1,0 +1,4 @@
+board: 8876 cycles (185 us), 8 instructions
+board vs ISA simulator: bit-exact
+board vs numpy: max |error| 5.96e-08, sum 1.000000
+first values: [0.00105 0.00048 0.00492 0.00099 0.00014 0.00213]

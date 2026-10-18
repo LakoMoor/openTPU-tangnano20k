@@ -14,7 +14,7 @@ import torch  # noqa: E402
 import transformers  # noqa: E402
 
 from opentpu import target as T  # noqa: E402
-from opentpu.host.tang import TangBackend, TangLink  # noqa: E402
+from opentpu.host.tang import TANG_BLOCK, TangBackend, TangLink  # noqa: E402
 from opentpu.llm import load_spec  # noqa: E402
 from opentpu.llm.qwen3 import Engine, load_weights  # noqa: E402
 from tools.tang import fatimg  # noqa: E402
@@ -45,7 +45,7 @@ def main():
         link = TangLink("tcp:127.0.0.1:5559", timeout=900)
         link.wait_ready(timeout=600)
         spec, W = load_spec(d), load_weights(d)
-        kw = dict(cap=256, cfg=T.config("tangnano20k"), resident=True)
+        kw = dict(cap=256, cfg=T.config("tangnano20k"), resident=True, block=TANG_BLOCK)
         ref, dut = Engine(spec, W, **kw), Engine(spec, W, backend=TangBackend.factory(link), **kw)
         ids = [1, 5000, 77, 12]
         ref.prefill(ids[:-1])

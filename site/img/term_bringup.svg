@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="220" viewBox="0 0 780 220">
+<rect width="780" height="220" rx="10" fill="#0d1117" stroke="#30363d"/>
+<circle cx="18" cy="16" r="5" fill="#ff5f56"/><circle cx="36" cy="16" r="5" fill="#ffbd2e"/><circle cx="54" cy="16" r="5" fill="#27c93f"/>
+<text x="390.0" y="20" fill="#8b949e" font-family="ui-monospace,Consolas,monospace" font-size="12" text-anchor="middle">tang nano 20k — openTPU</text>
+<text x="16" y="56" fill="#7ee787" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">$ python tools/tang/bringup.py --port COM6 --image STORY42.IMG --speed --sd hs,1,2,1</text>
+<text x="16" y="74" fill="#8b949e" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">[1] board: build 24f03996, hash fbf57956 (host fbf57956), CAPS e3000000, 48000 kHz, STATUS 0x68</text>
+<text x="16" y="92" fill="#8b949e" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">[2] SD card ready</text>
+<text x="16" y="110" fill="#e6edf3" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">    bus: {&#x27;hs&#x27;: True, &#x27;cmd6&#x27;: 1, &#x27;timeouts&#x27;: 0}</text>
+<text x="16" y="128" fill="#e6edf3" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">    card: SDHC True</text>
+<text x="16" y="146" fill="#e6edf3" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">    STORY42.IMG: block 727808, 47.0 MiB, first words [&#x27;0x0&#x27;, &#x27;0x0&#x27;, &#x27;0x0&#x27;, &#x27;0x0&#x27;]</text>
+<text x="16" y="164" fill="#79c0ff" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">[3] SDRAM: 1 MiB written (43 kB/s) and read (76 kB/s): 0 words wrong, 256 COW pages</text>
+<text x="16" y="182" fill="#8b949e" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">[4] card: 32 line fills in 0.19 s = 10.9 MB/s; reads restarted so far 36, blocks lost 0</text>
+<text x="16" y="200" fill="#79c0ff" xml:space="preserve" font-family="ui-monospace,Consolas,monospace" font-size="13">[5] core: 7393 cycles, 6 instructions, exp2 + rsum bit-exact</text>
+</svg>

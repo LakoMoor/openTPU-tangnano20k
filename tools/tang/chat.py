@@ -28,18 +28,21 @@ def main():
     ap.add_argument("--head-format", default=None)
     ap.add_argument("--image", default="OTPU.IMG")
     ap.add_argument("--raw", action="store_true", help="no chat template (a base model)")
+    ap.add_argument("--sd", default=None, help="the card's bus: hs,POL,SAMP[,NEG] (tools/tang/sdtune.py) or 24 (default)")
     a = ap.parse_args()
 
     from transformers import AutoTokenizer
     from opentpu import target as T
-    from opentpu.host.tang import TangBackend, TangLink
+    from opentpu.host.tang import TANG_BLOCK, TangBackend, TangLink
     from opentpu.llm import load_spec
     from opentpu.llm.qwen3 import Engine, load_weights
     tok = AutoTokenizer.from_pretrained(a.model)
     spec, W = load_spec(a.model), load_weights(a.model)
     link = TangLink(a.port)
     print("board:", link.wait_ready(), file=sys.stderr)
-    kw = dict(cap=a.cap, cfg=T.config("tangnano20k"), resident=True, wformat=a.wformat)
+    print("sd:", link.sd_setup(a.sd or "24"), file=sys.stderr)     # (a card swapped meanwhile)
+    kw = dict(cap=a.cap, cfg=T.config("tangnano20k"), resident=True, wformat=a.wformat,
+              block=TANG_BLOCK)
     if a.head_format:
         kw["head_format"] = a.head_format
     t0 = time.time()
@@ -61,8 +64,10 @@ def main():
         out = []
 
         def show(t):
+            # the decoded text's new part (one token alone loses SentencePiece's spaces)
+            shown = tok.decode(out, skip_special_tokens=True)
             out.append(t)
-            sys.stdout.write(tok.decode([t]))
+            sys.stdout.write(tok.decode(out, skip_special_tokens=True)[len(shown):])
             sys.stdout.flush()
         eng.generate_card(ids[-1], a.max_new, on_token=show)
         t3 = time.time()

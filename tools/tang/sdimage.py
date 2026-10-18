@@ -4,8 +4,8 @@
                                  [--head-format int8]
 
 Builds the image exactly as the Engine does for the board (targets/tangnano20k.toml), padded to
-64 KiB. Copy the file to the root of a FAT32 / exFAT card (freshly formatted: the file must be
-contiguous), as OTPU.IMG unless the chat is told another name.
+64 KiB. Copy the file to the root of a FAT16 / FAT32 / exFAT card (freshly formatted: the file must be
+contiguous), as OTPU.IMG unless the chat is told another name (--image).
 """
 from __future__ import annotations
 
@@ -38,7 +38,8 @@ def model_image(model_dir, cap=256, wformat="int8", head_format=None, cfg=None):
     from opentpu.llm.qwen3 import Engine, load_weights
     cfg = cfg or T.config("tangnano20k")
     spec, W = load_spec(model_dir), load_weights(model_dir)
-    kw = dict(cap=cap, cfg=cfg, resident=True, wformat=wformat, backend=Capture)
+    from opentpu.host.tang import TANG_BLOCK
+    kw = dict(cap=cap, cfg=cfg, resident=True, wformat=wformat, backend=Capture, block=TANG_BLOCK)
     if head_format:
         kw["head_format"] = head_format
     eng = Engine(spec, W, **kw)

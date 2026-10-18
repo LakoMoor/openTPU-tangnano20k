@@ -1,0 +1,6 @@
+# python tools/tang/chat.py E:/tangTPU/models/SmolLM2-135M-Instruct --port COM6 --image SMOL135.IMG --wformat fp4 --head-format int8 --sd hs,1,2,1 --prompt What is the capital of France? --max-new 16 (2026-10-18, Tang Nano 20K, SDHC card, 48 MHz SD high speed)
+board: {'version': 4195329, 'caps': 3808428032, 'core_khz': 48000, 'build': 619723158, 'platform': 3, 'hash': 4227168598, 'tmem': 8192, 'imem': 4096, 'act': 64, 'sdram_ready': True, 'sd_ready': True, 'sd_fail': False, 'sdhc': True, 'sd_state': 12}
+sd: {'hs': True, 'cmd6': 1, 'timeouts': 0}
+ready (110 s)
+The capital of France is Paris. It is a city that is known for its
+[37 prompt tokens 189.1 s, 16 tokens 192.9 s = 0.08 tok/s]

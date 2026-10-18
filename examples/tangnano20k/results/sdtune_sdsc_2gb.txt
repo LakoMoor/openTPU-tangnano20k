@@ -1,0 +1,19 @@
+# python tools/tang/sdtune.py --port COM6   (2026-10-18, Tang Nano 20K, a 2 GB SDSC card, FAT16)
+24 MHz: stable, 8.5 MB/s
+hs pol 0 samp 0 neg 0: 8/8 lines right, timeouts 0, 10.6 MB/s
+hs pol 0 samp 0 neg 1: 1/8 lines right, timeouts 0
+hs pol 0 samp 1 neg 0: 8/8 lines right, timeouts 0, 10.6 MB/s
+hs pol 0 samp 1 neg 1: 1/8 lines right, timeouts 0
+hs pol 0 samp 2 neg 0: 8/8 lines right, timeouts 0, 10.6 MB/s
+hs pol 0 samp 2 neg 1: 1/8 lines right, timeouts 0
+hs pol 0 samp 3 neg 0: 8/8 lines right, timeouts 0, 10.6 MB/s
+hs pol 0 samp 3 neg 1: 1/8 lines right, timeouts 0
+hs pol 1 samp 0 neg 0: 1/8 lines right, timeouts 0
+hs pol 1 samp 0 neg 1: 8/8 lines right, timeouts 0, 10.6 MB/s
+hs pol 1 samp 1 neg 0: 1/8 lines right, timeouts 0
+hs pol 1 samp 1 neg 1: 8/8 lines right, timeouts 0, 10.6 MB/s
+hs pol 1 samp 2 neg 0: 1/8 lines right, timeouts 0
+hs pol 1 samp 2 neg 1: 8/8 lines right, timeouts 0, 10.6 MB/s
+hs pol 1 samp 3 neg 0: 1/8 lines right, timeouts 0
+hs pol 1 samp 3 neg 1: 8/8 lines right, timeouts 0, 10.3 MB/s
+passing (pol, half cycles): [(0, 0), (0, 2), (0, 4), (0, 6), (1, -1), (1, 1), (1, 3), (1, 5)]; use --sd hs,0,1,0

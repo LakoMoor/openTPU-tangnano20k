@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openTPU on Tang Nano 20K</title>
+<meta name="repo" content="https://github.com/YOUR_NAME/openTPU-tangnano20k">
+<meta name="description" content="An open-source AI accelerator on a $25 FPGA: openTPU's ISA on the Sipeed Tang Nano 20K, language models streamed from the SD card, bit-exact with the simulator.">
+<style>
+  :root {
+    --bg: #0b0f17; --bg2: #111725; --card: #151c2c; --line: #263048; --fg: #e6edf3; --dim: #93a1b5;
+    --acc: #7ee787; --acc2: #79c0ff; --warn: #f3a712; --radius: 12px;
+    --mono: ui-monospace, "SF Mono", Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 var(--sans); }
+  a { color: var(--acc2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: var(--mono); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  nav { position: sticky; top: 0; z-index: 10; background: rgba(11,15,23,.85); backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--line); }
+  nav .wrap { display: flex; align-items: center; gap: 20px; height: 54px; overflow-x: auto; white-space: nowrap; }
+  nav b { font-family: var(--mono); color: var(--acc); }
+  nav a { color: var(--dim); font-size: 14px; }
+  nav a:hover { color: var(--fg); text-decoration: none; }
+  nav .gh { margin-left: auto; color: var(--fg); border: 1px solid var(--line); padding: 4px 12px; border-radius: 99px; }
+  header { padding: 72px 0 40px; background:
+           radial-gradient(900px 400px at 75% 0%, rgba(121,192,255,.12), transparent 60%),
+           radial-gradient(700px 360px at 10% 20%, rgba(126,231,135,.10), transparent 60%); }
+  h1 { font-size: clamp(32px, 6vw, 56px); line-height: 1.08; margin: 0 0 16px; letter-spacing: -.02em; }
+  h1 span { color: var(--acc); }
+  .lead { font-size: clamp(17px, 2.2vw, 20px); color: var(--dim); max-width: 760px; margin: 0 0 28px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 28px; }
+  .chip { border: 1px solid var(--line); background: var(--card); border-radius: 99px; padding: 6px 14px;
+          font-size: 14px; color: var(--dim); }
+  .chip b { color: var(--fg); }
+  .btns { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 10px 18px; border-radius: 10px; font-weight: 600; font-size: 15px; }
+  .btn.p { background: var(--acc); color: #0b0f17; }
+  .btn.s { border: 1px solid var(--line); color: var(--fg); }
+  .btn:hover { text-decoration: none; filter: brightness(1.08); }
+  section { padding: 56px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: clamp(24px, 3.4vw, 34px); margin: 0 0 8px; letter-spacing: -.01em; }
+  .sub { color: var(--dim); margin: 0 0 28px; max-width: 760px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 18px; }
+  .card p { margin: 0; color: var(--dim); font-size: 15px; }
+
+  /* terminal */
+  .term { background: #0d1117; border: 1px solid #30363d; border-radius: var(--radius); overflow: hidden; }
+  .term .bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #21262d; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .tabs { margin-left: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .tab { font: 13px var(--mono); color: var(--dim); background: none; border: 1px solid transparent;
+         border-radius: 7px; padding: 3px 10px; cursor: pointer; }
+  .tab.on { color: var(--fg); border-color: #30363d; background: #161b22; }
+  .term pre { margin: 0; padding: 16px 18px; min-height: 300px; max-height: 460px; overflow: auto;
+              font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .t-cmd { color: #7ee787; } .t-dim { color: #8b949e; } .t-ok { color: #79c0ff; } .t-out { color: #e6edf3; }
+  .cursor { display: inline-block; width: 8px; height: 15px; background: #e6edf3; vertical-align: -2px;
+            animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .note { font-size: 13px; color: var(--dim); margin-top: 10px; }
+
+  /* silicon */
+  .sil { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+  @media (max-width: 960px) { .sil { grid-template-columns: 1fr; } }
+  .chipview { position: relative; background: #070a10; border: 1px solid var(--line); border-radius: var(--radius);
+              padding: 10px; }
+  canvas { width: 100%; height: auto; display: block; image-rendering: auto; touch-action: none; }
+  .tip { position: absolute; pointer-events: none; background: rgba(13,17,23,.95); border: 1px solid #30363d;
+         border-radius: 8px; padding: 8px 10px; font: 12px/1.5 var(--mono); color: var(--fg); display: none;
+         max-width: 260px; z-index: 2; }
+  .ctrls { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 4px 2px; font-size: 14px; color: var(--dim); }
+  .ctrls label { cursor: pointer; user-select: none; }
+  .legend { display: flex; flex-direction: column; gap: 4px; }
+  .lg { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 8px; padding: 5px 8px;
+        border-radius: 8px; cursor: pointer; font-size: 13.5px; border: 1px solid transparent; }
+  .lg:hover, .lg.on { background: var(--bg2); border-color: var(--line); }
+  .lg i { width: 12px; height: 12px; border-radius: 3px; }
+  .lg span:last-child { color: var(--dim); font-family: var(--mono); font-size: 12px; }
+  .bar2 { height: 4px; border-radius: 2px; grid-column: 2 / 4; opacity: .85; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
+  @media (max-width: 600px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .stat b { display: block; font-size: 22px; font-family: var(--mono); }
+  .stat span { color: var(--dim); font-size: 13px; }
+
+  /* tables */
+  .tw { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; min-width: 640px; }
+  th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+       background: var(--bg2); }
+  tr:last-child td { border-bottom: 0; }
+  td.n { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  .ok { color: var(--acc); }
+  pre.code { background: #0d1117; border: 1px solid #30363d; border-radius: var(--radius); padding: 16px;
+             overflow-x: auto; font-size: 13.5px; line-height: 1.6; color: #e6edf3; }
+  pre.code .c { color: #8b949e; }
+  ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+  ol.steps li { counter-increment: s; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+                padding: 14px 16px 14px 56px; position: relative; color: var(--dim); }
+  ol.steps li::before { content: counter(s); position: absolute; left: 16px; top: 13px; width: 26px; height: 26px;
+                        border-radius: 50%; background: var(--bg2); border: 1px solid var(--line); color: var(--acc);
+                        font: 600 13px/26px var(--mono); text-align: center; }
+  ol.steps b { color: var(--fg); }
+  .arch svg { width: 100%; height: auto; display: block; }
+  footer { padding: 40px 0 60px; color: var(--dim); font-size: 14px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <b>openTPU / tang20k</b>
+  <a href="#demo">Demo</a><a href="#silicon">Silicon</a><a href="#how">How it works</a>
+  <a href="#results">Results</a><a href="#verified">Verified</a><a href="#start">Quick start</a>
+  <a class="gh" id="gh" href="#">GitHub ↗</a>
+</div></nav>
+
+<header><div class="wrap">
+  <h1>An AI accelerator<br>on a <span>$25 FPGA</span></h1>
+  <p class="lead">openTPU's instruction set, ported to the Sipeed Tang Nano 20K. Language models run with
+    their weights streamed straight off the SD card, and every result matches the ISA simulator
+    <b>bit for bit</b>.</p>
+  <div class="chips">
+    <span class="chip"><b>GW2AR-18</b> · 20,736 LUT4</span>
+    <span class="chip"><b>83%</b> LUTs · 39/46 BSRAM</span>
+    <span class="chip">core <b>48 MHz</b> (58.2 MHz Fmax)</span>
+    <span class="chip">SD <b>4-bit, 48 MHz</b>, CRC-checked</span>
+    <span class="chip"><b>1 GiB</b> virtual DRAM over 8 MiB SDRAM</span>
+  </div>
+  <div class="btns">
+    <a class="btn p" href="#demo">See it run</a>
+    <a class="btn s" href="#silicon">Explore the silicon</a>
+  </div>
+</div></header>
+
+<section id="demo"><div class="wrap">
+  <h2>It tells stories</h2>
+  <p class="sub">Real logs from the board, replayed. Every token reads the whole model image from the SD card,
+    through a 64 KiB line cache in SDRAM, into a core that executes one instruction at a time.</p>
+  <div class="term">
+    <div class="bar">
+      <span class="dot" style="background:#ff5f56"></span><span class="dot" style="background:#ffbd2e"></span>
+      <span class="dot" style="background:#27c93f"></span>
+      <div class="tabs" id="tabs"></div>
+    </div>
+    <pre id="term"></pre>
+  </div>
+  <p class="note">Replayed faster than real time; the speeds are in the logs (<a href="#results">results</a>).
+    Raw logs: <code>examples/tangnano20k/results/</code>.</p>
+</div></section>
+
+<section id="silicon"><div class="wrap">
+  <h2>The silicon</h2>
+  <p class="sub">Where nextpnr placed every cell of the design on the GW2AR-18, and the wires it routed, from the
+    bitstream's own placement (<code>pnr.json</code>). Hover a tile; click a module to light it up.</p>
+  <div class="sil">
+    <div>
+      <div class="chipview" id="chipview">
+        <canvas id="cv" width="1120" height="1080" aria-label="Placed and routed FPGA floorplan"></canvas>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="ctrls">
+        <label><input type="checkbox" id="c-route" checked> routing</label>
+        <label><input type="checkbox" id="c-cells" checked> logic</label>
+        <label><input type="checkbox" id="c-bram" checked> block RAM</label>
+        <label><input type="checkbox" id="c-dens"> density</label>
+      </div>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div class="stats" id="stats"></div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <p class="sub">openTPU's own microarchitecture needs five times this FPGA. This port keeps the ISA and its exact
+    arithmetic and rebuilds everything under it to fit.</p>
+  <div class="card arch" style="margin-bottom:20px">
+    <svg viewBox="0 0 1060 360" role="img" aria-label="Block diagram">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0L10 5L0 10z" fill="#93a1b5"/></marker></defs>
+      <style>
+        .bx{fill:#111725;stroke:#263048;stroke-width:1.5;rx:10}
+        .t{fill:#e6edf3;font:600 15px system-ui,sans-serif}
+        .s{fill:#93a1b5;font:12.5px system-ui,sans-serif}
+        .ln{stroke:#93a1b5;stroke-width:1.6;fill:none}
+      </style>
+      <rect class="bx" x="10" y="140" width="150" height="80" rx="10"/>
+      <text class="t" x="85" y="173" text-anchor="middle">Host PC</text>
+      <text class="s" x="85" y="194" text-anchor="middle">compiler · tokenizer</text>
+      <rect class="bx" x="200" y="140" width="130" height="80" rx="10"/>
+      <text class="t" x="265" y="173" text-anchor="middle">UART link</text>
+      <text class="s" x="265" y="194" text-anchor="middle">2 Mbaud · BL616</text>
+      <rect x="370" y="20" width="430" height="320" rx="14" fill="#0e1422" stroke="#3e8ed0" stroke-dasharray="5 5"/>
+      <text class="s" x="385" y="42" style="fill:#79c0ff">GW2AR-18 FPGA</text>
+      <rect class="bx" x="390" y="56" width="390" height="160" rx="10" style="stroke:#e4572e"/>
+      <text class="t" x="585" y="82" text-anchor="middle">lite core · openTPU ISA</text>
+      <g class="s">
+        <rect x="402" y="96" width="118" height="46" rx="7" fill="#1a2335" stroke="#29bf12"/><text x="461" y="124" text-anchor="middle">sequencer</text>
+        <rect x="526" y="96" width="118" height="46" rx="7" fill="#1a2335" stroke="#e4572e"/><text x="585" y="124" text-anchor="middle">MXU (int)</text>
+        <rect x="650" y="96" width="118" height="46" rx="7" fill="#1a2335" stroke="#f3a712"/><text x="709" y="124" text-anchor="middle">VPU</text>
+        <rect x="402" y="152" width="118" height="46" rx="7" fill="#1a2335" stroke="#ffd166"/><text x="461" y="180" text-anchor="middle">fp32 FMA</text>
+        <rect x="526" y="152" width="118" height="46" rx="7" fill="#1a2335" stroke="#a8c256"/><text x="585" y="180" text-anchor="middle">quantizer</text>
+        <rect x="650" y="152" width="118" height="46" rx="7" fill="#1a2335" stroke="#3e8ed0"/><text x="709" y="180" text-anchor="middle">TMEM · ACT RAM</text>
+      </g>
+      <rect class="bx" x="390" y="232" width="390" height="92" rx="10" style="stroke:#9b5de5"/>
+      <text class="t" x="585" y="258" text-anchor="middle">memory system · 1 GiB virtual DRAM</text>
+      <text class="s" x="585" y="280" text-anchor="middle">page table + TLB · 16 × 64 KiB SD line cache</text>
+      <text class="s" x="585" y="300" text-anchor="middle">copy-on-write pages · the card is never written</text>
+      <rect class="bx" x="850" y="200" width="200" height="66" rx="10" style="stroke:#f15bb5"/>
+      <text class="t" x="950" y="228" text-anchor="middle">SDRAM 8 MiB</text>
+      <text class="s" x="950" y="248" text-anchor="middle">cache · COW pages · tables</text>
+      <rect class="bx" x="850" y="282" width="200" height="66" rx="10" style="stroke:#00bbf9"/>
+      <text class="t" x="950" y="310" text-anchor="middle">SD card</text>
+      <text class="s" x="950" y="330" text-anchor="middle">model image · 4-bit · CRC16</text>
+      <path class="ln" d="M160 180H200" marker-start="url(#ar)" marker-end="url(#ar)"/>
+      <path class="ln" d="M330 180H390" marker-start="url(#ar)" marker-end="url(#ar)"/>
+      <path class="ln" d="M585 216V232" marker-start="url(#ar)" marker-end="url(#ar)"/>
+      <path class="ln" d="M780 262H850" marker-start="url(#ar)" marker-end="url(#ar)"/>
+      <path class="ln" d="M850 312H780" marker-end="url(#ar)"/>
+    </svg>
+  </div>
+  <div class="grid2">
+    <div class="card"><h3>One multiply-add does everything</h3><p>A single pipelined fp32 multiply-add serves every
+      vector op: add is <code>a·1+c</code>, multiply is <code>a·b+(−0)</code>, and exp2, reciprocal, rsqrt and log2 are the
+      ISA's fixed sequences on it. Row sums keep the ISA's 64 interleaved partials, so the bits match.</p></div>
+    <div class="card"><h3>Exact integer matmul</h3><p>MM accumulates int8 / int4 / fp4 / nvfp4 products exactly in
+      48-bit integers, four rows at a time, then applies the fp32 epilogue — the simulator's result, bit for bit.</p></div>
+    <div class="card"><h3>The SD card as DRAM</h3><p>The model image is one file on a FAT card. A page table maps the
+      1 GiB address space onto it; 64 KiB lines stream into SDRAM with CMD18; anything written gets a copy-on-write
+      page. 46 block RAMs, 8 MiB of SDRAM, and a 300 MB model.</p></div>
+    <div class="card"><h3>Trust, but verify the card</h3><p>Every 512-byte block's CRC16 is checked on all four data
+      lines. A bad or stalled block restarts the read from that block; if a block still fails, the host refuses the
+      result instead of printing wrong tokens.</p></div>
+  </div>
+</div></section>
+
+<section id="results"><div class="wrap">
+  <h2>Results</h2>
+  <p class="sub">Measured on the board, 2026-10-18: Tang Nano 20K, an SDHC card in 48 MHz high-speed mode, the core at
+    48 MHz. A token costs the image size over the card's ~10.9 MB/s.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Model</th><th>Weights</th><th>Image</th><th>Decode</th><th>Tokens</th></tr></thead>
+    <tbody>
+      <tr><td>stories42M <span style="color:var(--dim)">(llama2.c, TinyStories)</span></td><td>int8</td><td class="n">47 MiB</td>
+          <td class="n">0.22 tok/s</td><td><span class="ok">48/48</span> = simulator · 47/48 = Hugging Face fp32</td></tr>
+      <tr><td>SmolLM2-135M-Instruct</td><td>fp4, int8 head</td><td class="n">100 MiB</td><td class="n">0.08 tok/s</td>
+          <td>"The capital of France is Paris. It is a city that is known for its"</td></tr>
+      <tr><td>SmolLM2-360M-Instruct</td><td>fp4, int8 head</td><td class="n">239 MiB</td><td class="n" id="r360">—</td>
+          <td>simulator: 8/8 = Hugging Face, "The capital of France is Paris."</td></tr>
+    </tbody>
+  </table></div>
+  <div class="grid2" style="margin-top:20px">
+    <div class="card"><h3>SD card throughput</h3><p>24 MHz: 4.5–8.5 MB/s · 48 MHz high speed: 10.6–10.9 MB/s, on a 2 GB
+      SDSC card and an SDHC card. <code>sdtune.py</code> finds the clock phase and sampling edge.</p></div>
+    <div class="card"><h3>Where the time goes</h3><p>Streaming the weights: the core waits for the card. Prompts prefill
+      four tokens per pass over the weights, so a 37-token chat prompt costs about ten passes.</p></div>
+  </div>
+</div></section>
+
+<section id="verified"><div class="wrap">
+  <h2>Verified, layer by layer</h2>
+  <p class="sub">The ISA simulator is the reference. Everything below it is checked against it bit for bit.</p>
+  <ol class="steps">
+    <li><b>Random ISA programs on the RTL</b> (Verilator) against the simulator: every VOP, reductions, QACT / QST, MM in
+      four weight formats with every flag.</li>
+    <li><b>A SmolLM2-shaped network on the RTL</b> (2 layers, full 49K vocabulary): logits bit-exact in int8, int4, fp4,
+      nvfp4.</li>
+    <li><b>The whole virtual board</b> — SDRAM and SD card models, UART over TCP — with the host stack: bit-exact, also
+      with the card model stalling every 5th read and corrupting every 97th block (417 restarts).</li>
+    <li><b>On the board</b>: bring-up checks, an ISA softmax bit-exact against the simulator, and the chats above.</li>
+  </ol>
+</div></section>
+
+<section id="start"><div class="wrap">
+  <h2>Quick start</h2>
+  <p class="sub">A prebuilt bitstream is in the repo; building one needs the open-source OSS CAD Suite.</p>
+<pre class="code"><span class="c"># load the bitstream (SRAM; -f to flash)</span>
+openFPGALoader -b tangnano20k boards/tangnano20k/prebuilt/tang_top.fs
+
+<span class="c"># a model image for the card</span>
+hf download HuggingFaceTB/SmolLM2-135M-Instruct --local-dir models/SmolLM2-135M-Instruct
+python tools/tang/sdimage.py models/SmolLM2-135M-Instruct --wformat fp4 --head-format int8 --out SMOL135.IMG
+<span class="c"># copy SMOL135.IMG to a freshly formatted FAT16 / FAT32 / exFAT card, insert it</span>
+
+python tools/tang/bringup.py --port COM6 --image SMOL135.IMG --speed
+python tools/tang/sdtune.py  --port COM6           <span class="c"># prints e.g. --sd hs,1,2,1</span>
+python tools/tang/chat.py models/SmolLM2-135M-Instruct --port COM6 --image SMOL135.IMG \
+    --wformat fp4 --head-format int8 --sd hs,1,2,1
+
+<span class="c"># no board? the whole board in Verilator</span>
+bash sim/tang/build.sh &amp;&amp; python tools/tang/board_sim_test.py</pre>
+  <div class="grid2" style="margin-top:20px">
+    <div class="card"><h3>What fits</h3><p>Llama-family models with hidden size up to ~1K and head_dim, hidden and FFN in
+      multiples of 64 (zero-padding fixes an odd FFN). TMEM (8K words) and IMEM (512 instructions) are the limits.</p></div>
+    <div class="card"><h3>What doesn't (yet)</h3><p>TinyLlama-1.1B and Qwen3-0.6B need ~2× the TMEM this FPGA has;
+      stories110M's decode step is 583 instructions; GPT-Neo models (TinyStories-1M/33M) aren't in the compiler.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Built on <a href="https://github.com/FeSens/openTPU">FeSens/openTPU</a> (Apache-2.0): its ISA, simulator, compiler and
+  model code. This port adds the lite core, the Tang Nano 20K board design, the virtual board and the host tools.
+</div></footer>
+
+<script>
+// --- set this to the repository's URL --------------------------------------------------------------
+const REPO = document.querySelector('meta[name="repo"]')?.content || "https://github.com/";
+document.getElementById("gh").href = REPO;
+
+// --- terminal replay (the board's own logs) -------------------------------------------------------
+const LOGS = {
+  "stories42M": [
+    ["$ python tools/tang/chat.py models/stories42M-pad --port COM6 --image STORY42.IMG \\\n    --wformat int8 --raw --sd hs,1,2,1 --prompt \"Once upon a time\" --max-new 48", "cmd"],
+    ["sd: {'hs': True, 'cmd6': 1, 'timeouts': 0}\nready (38 s)", "dim"],
+    ["@Once upon a time, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she saw a big, yellow flower in the garden. It was a sunflower! Lily thought it was so", "stream"],
+    ["\n[5 prompt tokens 27.4 s, 48 tokens 213.5 s = 0.22 tok/s]", "dim"],
+  ],
+  "SmolLM2-135M": [
+    ["$ python tools/tang/chat.py models/SmolLM2-135M-Instruct --port COM6 --image SMOL135.IMG \\\n    --wformat fp4 --head-format int8 --sd hs,1,2,1 --prompt \"What is the capital of France?\"", "cmd"],
+    ["sd: {'hs': True, 'cmd6': 1, 'timeouts': 0}\nready (110 s)", "dim"],
+    ["@The capital of France is Paris. It is a city that is known for its", "stream"],
+    ["\n[37 prompt tokens 189.1 s, 16 tokens 192.9 s = 0.08 tok/s]", "dim"],
+  ],
+  "bringup": [
+    ["$ python tools/tang/bringup.py --port COM6 --image STORY42.IMG --speed --sd hs,1,2,1", "cmd"],
+    ["[1] board: build 24f03996, hash fbf57956 (host fbf57956), CAPS e3000000, 48000 kHz", "out"],
+    ["[2] SD card ready\n    bus: {'hs': True, 'cmd6': 1, 'timeouts': 0}\n    card: SDHC True\n    STORY42.IMG: block 727808, 47.0 MiB", "out"],
+    ["[3] SDRAM: 1 MiB written (43 kB/s) and read (76 kB/s): 0 words wrong, 256 COW pages", "ok"],
+    ["[4] card: 32 line fills in 0.19 s = 10.9 MB/s; reads restarted so far 36, blocks lost 0", "out"],
+    ["[5] core: 7393 cycles, 6 instructions, exp2 + rsum bit-exact", "ok"],
+  ],
+  "softmax (ISA)": [
+    ["$ python examples/tangnano20k/softmax_isa.py --port COM6", "cmd"],
+    ["board: 8890 cycles (185 us), 8 instructions", "out"],
+    ["board vs ISA simulator: bit-exact", "ok"],
+    ["board vs numpy: max |error| 5.96e-08, sum 1.000000\nfirst values: [0.00105 0.00048 0.00492 0.00099 0.00014 0.00213]", "out"],
+  ],
+};
+const term = document.getElementById("term"), tabs = document.getElementById("tabs");
+let run = 0;
+function esc(s) { return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function play(name) {
+  const me = ++run;
+  [...tabs.children].forEach(b => b.classList.toggle("on", b.dataset.k === name));
+  let html = "";
+  const show = (tail = "") => { term.innerHTML = html + tail + '<span class="cursor"></span>'; term.scrollTop = term.scrollHeight; };
+  for (const [text, kind] of LOGS[name]) {
+    if (me !== run) return;
+    if (kind === "cmd") {
+      for (let i = 0; i <= text.length; i += 2) {
+        if (me !== run) return;
+        show('<span class="t-cmd">' + esc(text.slice(0, i)) + "</span>");
+        await sleep(12);
+      }
+      html += '<span class="t-cmd">' + esc(text) + "</span>\n"; await sleep(500);
+    } else if (kind === "stream") {
+      const words = text.slice(1).split(/(?=[ ,.!])/);
+      let s = "";
+      for (const w of words) {
+        if (me !== run) return;
+        s += w; show('<span class="t-out">' + esc(s) + "</span>"); await sleep(90);
+      }
+      html += '<span class="t-out">' + esc(s) + "</span>";
+    } else {
+      html += '<span class="t-' + kind + '">' + esc(text) + "</span>\n"; show(); await sleep(420);
+    }
+  }
+  show();
+}
+Object.keys(LOGS).forEach(k => {
+  const b = document.createElement("button"); b.className = "tab"; b.textContent = k; b.dataset.k = k;
+  b.onclick = () => play(k); tabs.appendChild(b);
+});
+const io = new IntersectionObserver(e => { if (e[0].isIntersecting) { play("stories42M"); io.disconnect(); } });
+io.observe(term);
+
+// --- silicon viewer -------------------------------------------------------------------------------
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d"), tip = document.getElementById("tip");
+let D = null, focus = -1, tileAt = new Map();
+const opt = id => document.getElementById(id).checked;
+function hexA(h, a) { const n = parseInt(h.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+function draw() {
+  if (!D) return;
+  const S = cv.width / D.w;
+  cv.height = Math.round(S * D.h);
+  ctx.fillStyle = "#070a10"; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (opt("c-route")) {
+    ctx.lineWidth = Math.max(.6, S * .05);
+    for (const [g, x0, y0, x1, y1, n] of D.segs) {
+      const on = focus < 0 || focus === g;
+      ctx.strokeStyle = hexA(D.groups[g].color, on ? Math.min(.55, .10 + n * .05) : .025);
+      ctx.beginPath(); ctx.moveTo((x0 + .5) * S, (y0 + .5) * S); ctx.lineTo((x1 + .5) * S, (y1 + .5) * S); ctx.stroke();
+    }
+  }
+  if (opt("c-cells")) {
+    for (const [x, y, cnt] of D.tiles) {
+      let g = cnt[0][0], m = 0, tot = 0;
+      for (const [gg, n] of cnt) { tot += n; if (n > m) { m = n; g = gg; } }
+      let a = opt("c-dens") ? Math.min(1, .15 + tot / 28) : .85;
+      if (focus >= 0) {
+        const f = cnt.find(e => e[0] === focus);
+        if (!f) { a = .06; } else { g = focus; a = Math.min(1, .35 + f[1] / 20); }
+      }
+      ctx.fillStyle = hexA(D.groups[g].color, a);
+      ctx.fillRect(x * S + S * .1, y * S + S * .1, S * .8, S * .8);
+    }
+  }
+  if (opt("c-bram")) {
+    ctx.lineWidth = Math.max(1.2, S * .12);
+    for (const [x, y, g] of D.bsram) {
+      const on = focus < 0 || focus === g;
+      ctx.strokeStyle = hexA(D.groups[g].color, on ? 1 : .15);
+      ctx.fillStyle = hexA(D.groups[g].color, on ? .22 : .03);
+      ctx.fillRect(x * S + 1, y * S + 1, 3 * S - 2, S - 2);
+      ctx.strokeRect(x * S + 1, y * S + 1, 3 * S - 2, S - 2);
+    }
+  }
+}
+function legend() {
+  const L = document.getElementById("legend"); L.innerHTML = "";
+  const tot = g => Object.entries(g.cells).filter(([k]) => k !== "IO" && k !== "other").reduce((s, [, v]) => s + v, 0);
+  const maxT = Math.max(...D.groups.map(tot));
+  D.groups.forEach((g, i) => {
+    if (!tot(g)) return;
+    const c = g.cells, d = document.createElement("div");
+    d.className = "lg" + (focus === i ? " on" : "");
+    d.innerHTML = `<i style="background:${g.color}"></i><span>${g.label}</span><span>${((c.LUT || 0) + (c.ALU || 0)).toLocaleString()} LUT/ALU${c.BSRAM ? " · " + c.BSRAM + " BRAM" : ""}</span>` +
+                  `<div class="bar2" style="background:${g.color};width:${100 * tot(g) / maxT}%"></div>`;
+    d.onmouseenter = () => { focus = i; draw(); };
+    d.onmouseleave = () => { if (!d.dataset.pin) { focus = -1; draw(); } };
+    d.onclick = () => { const pin = !d.dataset.pin; [...L.children].forEach(e => { delete e.dataset.pin; e.classList.remove("on"); });
+                        if (pin) { d.dataset.pin = 1; d.classList.add("on"); focus = i; } else focus = -1; draw(); };
+    L.appendChild(d);
+  });
+  const U = D.util || {}, u = k => U[k] ? `${U[k][0].toLocaleString()} / ${U[k][1].toLocaleString()}` : "?";
+  document.getElementById("stats").innerHTML = [
+    [u("LUT4"), "LUT4 (nextpnr)"], [u("DFF"), "flip-flops"],
+    [u("BSRAM"), "block RAMs"], [(U.fmax_mhz || "?") + " MHz", "Fmax (runs at 48)"],
+  ].map(([b, s]) => `<div class="stat"><b>${typeof b === "number" ? b.toLocaleString() : b}</b><span>${s}</span></div>`).join("");
+}
+cv.addEventListener("mousemove", ev => {
+  if (!D) return;
+  const r = cv.getBoundingClientRect(), x = Math.floor((ev.clientX - r.left) / r.width * D.w),
+        y = Math.floor((ev.clientY - r.top) / r.height * D.h), t = tileAt.get(x + "," + y);
+  const b = D.bsram.find(([bx, by]) => by === y && x >= bx && x < bx + 3);
+  if (!t && !b) { tip.style.display = "none"; return; }
+  let h = `<b>X${x}Y${y}</b><br>`;
+  if (b) h += `block RAM · ${D.groups[b[2]].label}<br>`;
+  if (t) h += t.sort((p, q) => q[1] - p[1]).map(([g, n]) => `<span style="color:${D.groups[g].color}">■</span> ${n} · ${D.groups[g].label}`).join("<br>");
+  tip.innerHTML = h; tip.style.display = "block";
+  const pr = cv.parentElement.getBoundingClientRect();
+  tip.style.left = Math.min(ev.clientX - pr.left + 14, pr.width - 270) + "px";
+  tip.style.top = (ev.clientY - pr.top + 14) + "px";
+});
+cv.addEventListener("mouseleave", () => tip.style.display = "none");
+["c-route", "c-cells", "c-bram", "c-dens"].forEach(id => document.getElementById(id).onchange = draw);
+fetch("data/silicon.json").then(r => r.json()).then(d => {
+  D = d; for (const [x, y, c] of d.tiles) tileAt.set(x + "," + y, c.slice());
+  legend(); draw();
+}).catch(() => {
+  ctx.fillStyle = "#93a1b5"; ctx.font = "16px system-ui"; ctx.fillText("data/silicon.json did not load (open the site over http)", 24, 40);
+});
+</script>
+</body>
+</html>

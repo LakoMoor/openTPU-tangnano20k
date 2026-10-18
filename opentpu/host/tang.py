@@ -31,6 +31,7 @@ R_CFG_TMEM, R_CFG_IMEM, R_CFG_ACT, R_CFG_DRAM, R_CFG_PLATFORM, R_CFG_HASH = \
     0x084, 0x088, 0x08C, 0x090, 0x098, 0x09C
 R_IMG_LBA, R_IMG_BYTES, R_MAP, R_MAP_STATUS, R_FAULT_ADDR, R_LINE_FILLS, R_SD, R_ECODE = \
     0x200, 0x204, 0x208, 0x20C, 0x210, 0x214, 0x218, 0x21C
+R_SD_CFG = 0x220
 CTRL_RUN, CTRL_CLEAR = 0x1, 0x4
 ST_HALTED, ST_ERROR, ST_LOADING, ST_WR_IDLE, ST_MEM, ST_SD, ST_RUN, ST_WAIT_TO = \
     0x1, 0x2, 0x4, 0x8, 0x20, 0x40, 0x80, 0x100
@@ -42,6 +43,9 @@ ACK = 0xA5
 MAX_WORDS = 1024                          # words per R command: the BL616 bridge drops bytes of
                                           # longer bursts (8 KiB pass)
 W_WORDS = 64                              # words per W command: the board's receive FIFO
+# The attention block of the board's programs (Engine block): its 8K-word TMEM holds the score
+# buffers of 64-token blocks (SmolLM2-360M does not fit with the default 256)
+TANG_BLOCK = 64
 
 
 class TangError(RuntimeError):
@@ -183,6 +187,42 @@ class TangLink:
                 raise TangError(f"the board is not ready: {i}, STATUS {st:#x}")
             time.sleep(0.05)
 
+    def sd_config(self, hs: bool = False, pol: int = 0, samp: int = 1, div: int = 0,
+                  reinit: bool = False, neg: int = 0) -> dict:
+        """The card's bus (register 0x220): the sampling delay (clk cycles), the data clock's
+        divider (48 MHz / 2 div; 0: 24 MHz) and high speed (CMD6, then the card clock at 48 MHz;
+        pol 1 inverts it; neg 1 samples on clk's falling edge). High speed stays on until a
+        reinit."""
+        self.reg_write(R_SD_CFG, (int(reinit) << 31) | (div << 8) | (neg << 4) | (pol << 3)
+                       | (int(hs) << 2) | samp)
+        if reinit:
+            time.sleep(0.05)
+            self.wait_ready(timeout=10)
+        t0 = time.monotonic()
+        while hs and not self.reg_read(R_SD_CFG) >> 6 & 1:
+            if time.monotonic() - t0 > 2:
+                raise TangError("the card did not answer the switch to high speed (CMD6)")
+            time.sleep(0.01)
+        v = self.reg_read(R_SD_CFG)
+        return {"hs": bool(v >> 7 & 1), "cmd6": v >> 2 & 0xF, "timeouts": v >> 16}
+
+    def sd_setup(self, spec: str | None = None) -> dict | None:
+        """The bus settings as the host tools' --sd (or TANG_SD) gives them: "hs,POL,SAMP[,NEG]"
+        (tools/tang/sdtune.py finds them), "24" (the default bus) or nothing (left as it is)."""
+        spec = spec or os.environ.get("TANG_SD")
+        if not spec:
+            return None
+        if spec == "24":
+            return self.sd_config(reinit=True)
+        mode, pol, samp, *neg = spec.split(",")
+        if mode != "hs":
+            raise ValueError(f"--sd {spec!r}: hs,POL,SAMP or 24")
+        self.sd_config(reinit=True)
+        st = self.sd_config(hs=True, pol=int(pol), samp=int(samp), neg=int(neg[0]) if neg else 0)
+        if not st["hs"]:
+            raise TangError(f"the card did not switch to high speed (CMD6 result {st['cmd6']:#x})")
+        return st
+
     def set_image(self, lba: int, nbytes: int) -> None:
         """Point the board at the image (its first block, its size) and start from a clean
         address space (the page table and the line cache cleared, no COW page)."""
@@ -200,7 +240,20 @@ class TangLink:
         self.start(prog_addr, n, args)
         return self.wait(timeout)
 
+    def card_check(self) -> None:
+        """Raise if the card left blocks unsent since the last check: the board reads them as
+        zeros after its restarts of the read (tang_sd.sv), so the run's results are wrong."""
+        lost = self.reg_read(R_SD_CFG) >> 16
+        seen = getattr(self, "_lost", None)
+        self._lost = lost
+        if seen is not None and lost != seen:
+            raise TangError(f"the SD card did not send {(lost - seen) % 65536} blocks (read as "
+                            "zeros): a slow or failing card, or the bus settings (--sd; "
+                            "tools/tang/sdtune.py)")
+
     def start(self, prog_addr: int, n: int, args=()) -> None:
+        if getattr(self, "_lost", None) is None:
+            self.card_check()
         for k in range(8):
             v = int(args[k]) if k < len(args) else 0
             self.reg_write(R_ARG0 + 4 * k, v)
@@ -232,10 +285,11 @@ class TangLink:
         if ms >> 31:
             raise TangError(f"the board's memory faulted at {self.reg_read(R_FAULT_ADDR):#x} "
                             f"({ms & 0xFFFF} COW pages used): out of SDRAM, or an address past "
-                            "512 MiB")
+                            "1 GiB")
         if st & ST_ERROR:
             e = self.reg_read(R_ECODE)
             raise TangError(f"the program stopped: {ECODES.get(e, e)}")
+        self.card_check()
         return {"cycles": cyc, "instructions": ic, "status": st,
                 "seconds": cyc / (self.reg_read(R_CORE_KHZ) * 1e3)}
 
@@ -382,6 +436,8 @@ class TangBackend:
             raise TangError(f"the bitstream's configuration (hash {info['hash']:08x}) is not "
                             f"this one's ({T.arch_hash(cfg):08x})")
         img = np.asarray(images[0], np.uint8)
+        self.link._lost = None
+        self.link.card_check()                  # (the count of blocks the card left unsent)
         lba, size = find_image(self.link, image_name)
         if size < img.size:
             raise TangError(f"{image_name} on the card has {size} bytes, the model's image "
@@ -395,6 +451,7 @@ class TangBackend:
                 raise TangError(f"{image_name} on the card is not this model's image (word "
                                 f"{4 * a:#x}: card {got:#x}, image {want:#x}): write it with "
                                 "tools/tang/sdimage.py")
+        self.link.card_check()
         self.image_bytes = img.size
         self.prog_at = -(-img.size // 4096) * 4096
         self.cycles = 0

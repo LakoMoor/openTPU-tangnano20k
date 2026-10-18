@@ -1,6 +1,6 @@
 // The Tang Nano 20K build without its PLL (the testbench drives clk and the 180-degree clk_p),
 // with the SDRAM and SD card models: tb_board.cpp talks to it over the UART.
-module tb_board #(parameter logic [31:0] ARCH_HASH = 32'h0) (
+module tb_board #(parameter int ARCH_HI = 0, ARCH_LO = 0) (  // the arch hash's halves (-G: ints)
   input  logic clk,
   input  logic clk_p,
   input  logic rst,
@@ -43,15 +43,27 @@ module tb_board #(parameter logic [31:0] ARCH_HASH = 32'h0) (
 
   logic        sd_ready, sd_fail, sdhc, sd_req, sd_busy, sd_dv, sd_clk;
   logic [7:0]  sd_state;
+  logic [19:0] sd_info;
+  logic [15:0] sd_tmo, sd_retry;
+  logic        sd_ok, sd_bad;
+  logic [7:0]  sd_div;
+  logic [1:0]  sd_samp;
+  logic        sd_reinit, sd_hs, sd_pol, sd_neg;
+  logic [5:0]  sd_hs_stat;
+  logic [2:0]  sd_rsel;
+  logic [31:0] sd_resp;
+  logic [7:0]  sd_rtmo;
   logic [31:0] sd_lba, sd_dw;
   logic [15:0] sd_n;
   tri1         sd_cmd;                  // the card slot's pull-up
   wire  [3:0]  sd_dat;
-  tang_sd #(.SLOW_DIV(4)) u_sd (
-    .clk, .rst, .ready(sd_ready), .fail(sd_fail), .sdhc, .state_dbg(sd_state),
-    .rd_req(sd_req), .rd_lba(sd_lba), .rd_n(sd_n), .busy(sd_busy), .dv(sd_dv), .dw(sd_dw),
+  tang_sd #(.SLOW_DIV(4), .IDLE_BITS(14)) u_sd (
+    .clk, .rst, .ready(sd_ready), .fail(sd_fail), .sdhc, .state_dbg(sd_state), .info_dbg(sd_info),
+    .cfg_div(sd_div), .cfg_samp(sd_samp), .cfg_hs(sd_hs), .cfg_pol(sd_pol), .cfg_neg(sd_neg), .hs_stat(sd_hs_stat),
+    .reinit(sd_reinit), .rd_tmo(sd_tmo), .rd_retry(sd_retry), .resp_sel(sd_rsel), .resp_dbg(sd_resp), .resp_tmo(sd_rtmo),
+    .rd_req(sd_req), .rd_lba(sd_lba), .rd_n(sd_n), .busy(sd_busy), .dv(sd_dv), .dw(sd_dw), .blk_ok(sd_ok), .blk_bad(sd_bad),
     .sd_clk, .sd_cmd, .sd_dat);
-  sd_model u_sdc (.sd_clk, .sd_cmd, .sd_dat);
+  sd_model #(.STALL_EVERY(5), .ERR_EVERY(97)) u_sdc (.sd_clk, .sd_cmd, .sd_dat);
 
   logic        h_req, h_we, h_raw, h_rdy, h_rv;
   logic [31:0] h_addr, h_wd, h_rd;
@@ -64,14 +76,15 @@ module tb_board #(parameter logic [31:0] ARCH_HASH = 32'h0) (
     .cow_used, .line_fills,
     .c_req, .c_we, .c_addr, .c_wd, .c_be, .c_rdy, .c_rv, .c_rd,
     .h_req, .h_we, .h_raw, .h_addr, .h_wd, .h_be, .h_rdy, .h_rv, .h_rd,
-    .sd_ready, .sd_req, .sd_lba, .sd_n, .sd_busy, .sd_dv, .sd_dw,
+    .sd_ready, .sd_req, .sd_lba, .sd_n, .sd_busy, .sd_dv, .sd_dw, .sd_ok, .sd_bad,
     .m_ready, .m_req, .m_we, .m_addr, .m_len, .m_ack, .m_wtake, .m_wd, .m_wbe, .m_rv, .m_rd);
 
-  tang_host #(.DIV(24), .CORE_KHZ(48000), .ARCH_HASH(ARCH_HASH)) u_host (
+  tang_host #(.DIV(24), .CORE_KHZ(48000), .ARCH_HASH({ARCH_HI[15:0], ARCH_LO[15:0]})) u_host (
     .clk, .rst, .uart_rx, .uart_tx,
     .h_req, .h_we, .h_raw, .h_addr, .h_wd, .h_be, .h_rdy, .h_rv, .h_rd,
     .core_rst, .core_start, .prog_addr, .prog_n, .args, .halted, .error, .loading, .ecode,
     .icount, .img_lba, .img_bytes, .map_reset, .map_busy, .mem_idle, .fault,
     .sdram_ready(m_ready), .sd_ready, .sd_fail, .sdhc, .fault_addr, .line_fills, .cow_used,
-    .sd_state, .led);
+    .sd_state, .sd_info, .sd_tmo, .sd_retry, .sd_div, .sd_samp, .sd_reinit, .sd_hs, .sd_pol, .sd_neg, .sd_hs_stat,
+    .sd_rsel, .sd_resp, .sd_rtmo, .led);
 endmodule

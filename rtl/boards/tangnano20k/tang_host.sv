@@ -44,8 +44,11 @@ module tang_host #(
   input  logic [7:0]  sd_state,
   input  logic [19:0] sd_info,
   input  logic [15:0] sd_tmo,
+  input  logic [15:0] sd_retry,
   output logic [7:0]  sd_div,            // 0x220: the SD settings (tang_sd's cfg_*)
   output logic [1:0]  sd_samp,
+  output logic        sd_hs, sd_pol, sd_neg,
+  input  logic [5:0]  sd_hs_stat,
   output logic        sd_reinit,
   output logic [2:0]  sd_rsel,
   input  logic [31:0] sd_resp,
@@ -104,7 +107,7 @@ module tang_host #(
       16'h084: return 32'(TMEM_WORDS);
       16'h088: return 32'(IMEM_WORDS);
       16'h08C: return 32'(ACT_BLOCKS);
-      16'h090: return {8'd0, 8'd29, 8'd1, 8'd29};               // 512 MiB, one channel
+      16'h090: return {8'd0, 8'd30, 8'd1, 8'd30};               // 1 GiB, one channel
       16'h094: return 32'h0001_0000;                            // CFG_UARCH: ULANES 1
       16'h098: return 32'(PLATFORM);
       16'h09C: return ARCH_HASH;
@@ -117,9 +120,10 @@ module tang_host #(
       16'h214: return line_fills;
       16'h218: return {sd_state, sd_info, sdhc, sd_fail, sd_ready, sdram_ready};
       16'h21C: return {28'd0, ecode};
-      16'h220: return {sd_tmo, sd_div, 6'd0, sd_samp};
+      16'h220: return {sd_tmo, sd_div, sd_hs_stat, sd_samp};
       16'h224: return sd_resp;                                    // the response 0x228 selects
       16'h228: return {16'd0, sd_rtmo, 5'd0, sd_rsel};
+      16'h22C: return {16'd0, sd_retry};                         // reads restarted (stalls)
       default: return 32'hDEAD_BEEF;
     endcase
   endfunction
@@ -155,7 +159,7 @@ module tang_host #(
     else if (idle != '1) idle <= idle + 18'd1;
     if (rst) begin
       ps <= P_OP; run <= 1'b0; h_req <= 1'b0; img_lba <= '0; img_bytes <= '0;
-      sd_div <= '0; sd_samp <= 2'd1;
+      sd_div <= '0; sd_samp <= 2'd1; sd_hs <= 1'b0; sd_pol <= 1'b0; sd_neg <= 1'b0;
       for (int k = 0; k < 8; k++) args[k] <= '0;
     end else if (idle == '1) begin
       ps <= P_OP;                         // a stalled command: dropped
@@ -194,6 +198,9 @@ module tang_host #(
             16'h228: sd_rsel <= hdr[18:16];
             16'h220: begin
               sd_samp <= hdr[17:16];
+              sd_hs <= hdr[18];
+              sd_pol <= hdr[19];
+              sd_neg <= hdr[20];
               sd_div <= hdr[31:24];
               sd_reinit <= hdr[47];
             end

@@ -15,6 +15,7 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 import transformers  # noqa: E402
 
+from opentpu.host.tang import TANG_BLOCK  # noqa: E402
 from opentpu.isasim import Config  # noqa: E402
 from opentpu.llm import load_spec  # noqa: E402
 from opentpu.llm.qwen3 import Engine, load_weights  # noqa: E402
@@ -41,7 +42,7 @@ def main():
         p = pathlib.Path(d)
         m.save_pretrained(p)
         spec, W = load_spec(p), load_weights(p)
-    kw = dict(cap=256, cfg=CFG, resident=True, wformat=a.wformat)
+    kw = dict(cap=256, cfg=CFG, resident=True, wformat=a.wformat, block=TANG_BLOCK)
     ref = Engine(spec, W, **kw)
     dut = Engine(spec, W, backend=LiteBackend, **kw)
     toks = [1, 400, 5000, 77, 9, 123][:a.tokens]

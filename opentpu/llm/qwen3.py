@@ -120,9 +120,9 @@ class Spec:
                 (self.ffn % (S * D) == 0, f"ffn {self.ffn} % S*D"),
                 (self.n_kv % S == 0, f"n_kv {self.n_kv} % S"),
                 (self.n_q % self.n_kv == 0, "n_q % n_kv"),
-                (self.n_q // self.n_kv <= cfg.MCOLS, "query group larger than MXU columns"),
                 (self.vocab % S == 0, f"vocab {self.vocab} % S"),
-                (max(self.ffn, self.n_q * self.head_dim, self.hidden) <= cfg.ACT_BLOCKS * D,
+                # (the MLP's down projection takes the FFN in chunks: ACT RAM holds a chunk)
+                (max(self.n_q * self.head_dim, self.hidden) <= cfg.ACT_BLOCKS * D,
                  "an inner dimension exceeds ACT RAM")]
         bad = [m for ok, m in need if not ok]
         if bad:
@@ -861,6 +861,7 @@ def emulated_logits(spec: Spec, W: dict, tokens, D: int = 128, wformat: str = "i
 # 128 at long contexts) and score blocks in flight per head.
 ATTN_BLOCK = 256
 ATTN_DEPTH = 3
+LAZY_Q_TMEM = 16384  # TMEM words below which the attention projects queries per head, two deep
 
 
 class _Bump:
@@ -1331,7 +1332,13 @@ def _attention(x, lw, c, s_, pos: int, spec: Spec, block: int, gated: bool = Fal
     scale = ol.LOG2E / math.sqrt(d)
     heads = list(kv.owned_heads(spec.n_kv))
     nh = len(heads)
-    qps = [ol.dot(xs, lw.wq[j * G * d:(j + 1) * G * d, :]) for j in range(nh)]  # [1, G*d]
+    # [1, G*d] each; a small TMEM (LAZY_Q_TMEM) projects each head's queries just before its
+    # attention instead of all of them first (the same MMs: the same results)
+    lazy = ol.tmem_words() < LAZY_Q_TMEM
+
+    def qproj(j):
+        return ol.dot(xs, lw.wq[j * G * d:(j + 1) * G * d, :])
+    qps = [None] * nh if lazy else [qproj(j) for j in range(nh)]
     kh = _rope_padded(_norm_heads(k.reshape(nh, d), kn, eps), c, s_)  # [nkv_loc, d or D]
     vh = _padded(v.reshape(nh, d))
     for j, hh in enumerate(heads):
@@ -1342,7 +1349,8 @@ def _attention(x, lw, c, s_, pos: int, spec: Spec, block: int, gated: bool = Fal
             # the head's V^T append (byte-strided, the quantizer's slowest store) just ahead of
             # its queries: head j's scores start after K and V_0..V_j, not after all V appends
             ol.kv_append(kv, heads[j], kpos, None, vh[j:j + 1, :])
-            return _rope_padded(_norm_heads(qps[j].reshape(G, d), qn, eps), c, s_)
+            qp = qps[j] if qps[j] is not None else qproj(j)
+            return _rope_padded(_norm_heads(qp.reshape(G, d), qn, eps), c, s_)
         return emit
 
     mc = min(G, ol.mxu_columns())
@@ -1362,7 +1370,7 @@ def _attention(x, lw, c, s_, pos: int, spec: Spec, block: int, gated: bool = Fal
         qhs = [part(*p) for p in parts]
     seq = pos.bucket if isinstance(pos, RunPos) else pos + 1
     outs = _attend_heads(qhs, kv, [heads[j] for j, _, _ in parts], seq, block, scale,
-                         depth=ATTN_DEPTH, ahead=2)
+                         depth=2 if lazy else ATTN_DEPTH, ahead=0 if lazy else 2)
     o_row = ol.empty([1, G * nh * d])
     o_loc = o_row.reshape(G * nh, d)            # the heads' outputs, written in place
     for (j, g0, g1), (acc, l) in zip(parts, outs):

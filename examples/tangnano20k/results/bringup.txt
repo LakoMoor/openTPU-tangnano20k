@@ -1,0 +1,9 @@
+# python tools/tang/bringup.py --port COM6 --image STORY42.IMG --speed --sd hs,1,2,1   (2026-10-18, Tang Nano 20K, SDHC card)
+[1] board: build 24f03996, hash fbf57956 (host fbf57956), CAPS e3000000, 48000 kHz, STATUS 0x68
+[2] SD card ready
+    bus: {'hs': True, 'cmd6': 1, 'timeouts': 0}
+    card: SDHC True
+    STORY42.IMG: block 727808, 47.0 MiB, first words ['0x0', '0x0', '0x0', '0x0']
+[3] SDRAM: 1 MiB written (43 kB/s) and read (76 kB/s): 0 words wrong, 256 COW pages
+[4] card: 32 line fills in 0.19 s = 10.9 MB/s; reads restarted so far 36, blocks lost 0
+[5] core: 7393 cycles, 6 instructions, exp2 + rsum bit-exact

@@ -1,8 +1,11 @@
 // Behavioural model of an SDHC card in SD mode, 4-bit reads: CMD0, 8, 55, ACMD41, 2, 3, 7,
-// ACMD6, 16, 18 (multi-block read from the block in the argument), 12. The card's bytes come
+// ACMD6, 16, 6 (switch function: a 64-byte status, high speed supported), 18 (multi-block read from the block in the argument), 12. The card's bytes come
 // from the testbench (DPI: sd_byte). Commands are sampled on the rising clock, responses and
-// data driven on the falling one. CRCs are not checked; data CRCs are sent as zeros.
-module sd_model (
+// data driven on the falling one. CRCs are not checked; data CRCs are sent as zeros. Every
+// STALL_EVERY-th multi-block read (0: none) stops sending after its third block until CMD12,
+// as a card that stalls (the host restarts the read). The data CRC16s are the real ones; every
+// ERR_EVERY-th block (0: none) has a data bit flipped after its CRC was computed.
+module sd_model #(parameter int STALL_EVERY = 0, parameter int ERR_EVERY = 0) (
   input  logic       sd_clk,
   inout  wire        sd_cmd,
   output logic [3:0] sd_dat
@@ -21,7 +24,15 @@ module sd_model (
   logic        acmd;
   logic [3:0]  a41;
   // data
-  logic        rd_on, stop;
+  logic        rd_on, stop, sw;           // sw: the data is CMD6's status
+  int          nreads, nblk;
+  logic        hold;                      // stalled
+  logic [15:0] crc [4];
+  int          nall;                      // blocks sent
+
+  function automatic logic [15:0] crc16(input logic [15:0] c, input logic b);
+    return {c[14:0], 1'b0} ^ ((b ^ c[15]) ? 16'h1021 : 16'h0000);
+  endfunction
   logic [31:0] blk;
   logic [11:0] dn;                        // nibble position in the block frame
   logic [7:0]  gap;
@@ -42,7 +53,7 @@ module sd_model (
     return {2'b00, idx, arg, crc7({2'b00, idx, arg}), 1'b1};
   endfunction
 
-  initial begin cmd_oe = 0; sd_dat = 4'hF; inc = 0; txn = 0; rd_on = 0; busy = 0; a41 = 0; acmd = 0; end
+  initial begin sw = 0; hold = 0; nreads = 0; nblk = 0; nall = 0; cmd_oe = 0; sd_dat = 4'hF; inc = 0; txn = 0; rd_on = 0; busy = 0; a41 = 0; acmd = 0; end
 
   always @(posedge sd_clk) begin
     if (txn == 0 && !cmd_oe) begin
@@ -78,9 +89,15 @@ module sd_model (
             6'd3: begin tx[135:88] <= r48(6'd3, 32'h1234_0500); txn <= 48; end
             6'd7: begin tx[135:88] <= r48(6'd7, 32'h0000_0700); txn <= 48; busy <= 20; end
             6'd16: begin tx[135:88] <= r48(6'd16, 32'h0000_0900); txn <= 48; end
+            6'd6: begin
+              tx[135:88] <= r48(6'd6, 32'h0000_0900); txn <= 48;
+              rd_on <= 1; stop <= 0; sw <= 1; dn <= 0; gap <= 10;
+            end
             6'd18: begin
               tx[135:88] <= r48(6'd18, 32'h0000_0900); txn <= 48;
-              rd_on <= 1; stop <= 0; blk <= arg; dn <= 0; gap <= 10;
+              rd_on <= 1; stop <= 0; sw <= 0; blk <= arg; dn <= 0; gap <= 10;
+              nreads <= nreads + 1; nblk <= 0;
+              hold <= 0;
             end
             6'd12: begin tx[135:88] <= r48(6'd12, 32'h0000_0B00); txn <= 48; stop <= 1; busy <= 30; end
             default: begin tx[135:88] <= r48(idx, 32'h0000_0900); txn <= 48; end
@@ -102,18 +119,36 @@ module sd_model (
       end
     end else cmd_oe <= 0;
     // data: start nibble, 1024 data nibbles, 16 CRC nibbles, the end nibble, a gap
-    if (rd_on && !stop) begin
+    if (rd_on && !stop && hold) sd_dat <= 4'hF;
+    else if (rd_on && !stop) begin
       if (gap != 0) begin gap <= gap - 1; sd_dat <= 4'hF; end
       else begin
-        if (dn == 0) sd_dat <= 4'h0;
-        else if (dn <= 1024) begin
+        if (dn == 0) begin
+          sd_dat <= 4'h0;
+          for (int i = 0; i < 4; i++) crc[i] <= '0;
+        end else if (sw) begin                 // status nibbles: 27 (bits 403:400), 33 (379:376)
+          sd_dat <= (dn == 28) ? 4'h3 : (dn == 34) ? 4'h1 : (dn <= 144) ? 4'h0 : 4'hF;
+          dn <= dn + 1;
+          if (dn == 145) begin rd_on <= 0; sw <= 0; end
+        end else if (dn <= 1024) begin
           logic [7:0] b;
+          logic [3:0] v;
           b = 8'(sd_byte({blk, 9'd0} + 64'((dn - 1) >> 1)));
-          sd_dat <= ((dn - 1) & 1) ? b[3:0] : b[7:4];
-        end else if (dn <= 1040) sd_dat <= 4'h0;
+          v = ((dn - 1) & 1) ? b[3:0] : b[7:4];
+          for (int i = 0; i < 4; i++) crc[i] <= crc16(crc[i], v[i]);
+          if (ERR_EVERY != 0 && nall % ERR_EVERY == ERR_EVERY - 1 && dn == 101) v[0] = !v[0];
+          sd_dat <= v;
+        end else if (dn <= 1040) begin
+          for (int i = 0; i < 4; i++) sd_dat[i] <= crc[i][15 - (dn - 1025)];
+        end
         else sd_dat <= 4'hF;
-        dn <= dn + 1;
-        if (dn == 1041) begin dn <= 0; blk <= blk + 1; gap <= 4; end
+        if (!sw || dn == 0) dn <= dn + 1;
+        if (!sw && dn == 1041) begin
+          dn <= 0; blk <= blk + 1; gap <= 4;
+          nblk <= nblk + 1;
+          nall <= nall + 1;
+          if (STALL_EVERY != 0 && nreads % STALL_EVERY == 0 && nblk == 2) hold <= 1;
+        end
       end
     end else if (busy != 0) begin
       busy <= busy - 1;
