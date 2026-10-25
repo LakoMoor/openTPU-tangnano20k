@@ -10,6 +10,16 @@ weights **streamed from the SD card**, and produces the ISA simulator's results 
 **Project site:** `site/` (GitHub Pages: an interactive map of the placed and routed FPGA, the
 board's logs replayed, how it works). Locally: `python -m http.server -d site`.
 
+**Web control room:** open `control/` on the project site (locally:
+`http://localhost:8000/control/`). The static GitHub Pages UI connects directly to the
+board using Web Serial in desktop Chrome/Edge over HTTPS or localhost, at 2 Mbaud.
+Select the USB UART device in the browser dialog. It verifies the OTPU ID and monitors
+core frequency, cycles, instructions, SDRAM and SD status without writing registers.
+Disconnect in the UI before running Python tools: a serial port has one owner.
+The animated data path is schematic; the text generation playground is a labeled,
+prerecorded demo, not model inference. Real model generation still uses `tools/tang/chat.py`.
+Deploy with the existing Pages workflow (`Settings → Pages → Source: GitHub Actions`).
+
 | model | weights | image on the card | on the board | tokens |
 |:--|:--|--:|--:|:--|
 | stories42M (llama2.c, TinyStories) | int8 | 47 MiB | 0.22 tok/s | 48 / 48 = ISA simulator, 47 / 48 = Hugging Face fp32 |
